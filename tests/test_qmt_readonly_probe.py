@@ -1,5 +1,7 @@
 import importlib
 import io
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 
@@ -70,6 +72,43 @@ class ReadonlyProbeTests(unittest.TestCase):
         self.assertIsNone(context_info.account_id)
         self.assertEqual(query_count[0], 0)
         self.assertIn("account_missing", output.getvalue())
+
+    def test_load_config_reads_latest_file_without_importlib(self):
+        original_module_file = self.probe.__file__
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            self.probe.__file__ = os.path.join(
+                temporary_directory,
+                "lean_qmt_readonly_probe.py",
+            )
+            config_path = os.path.join(
+                temporary_directory,
+                "qmt_local_config.py",
+            )
+
+            with open(config_path, "w") as config_file:
+                config_file.write(
+                    'ACCOUNT_ID = "first"\n'
+                    'PROBE_STOCK_CODE = "600000.SH"\n'
+                    "SUBSCRIBE_TICKS = False\n"
+                )
+            self.assertEqual(
+                self.probe._load_config(),
+                ("first", "600000.SH", False),
+            )
+
+            with open(config_path, "w") as config_file:
+                config_file.write(
+                    'ACCOUNT_ID = "second-account"\n'
+                    'PROBE_STOCK_CODE = "000001.SZ"\n'
+                    "SUBSCRIBE_TICKS = True\n"
+                )
+            self.assertEqual(
+                self.probe._load_config(),
+                ("second-account", "000001.SZ", True),
+            )
+
+        self.probe.__file__ = original_module_file
 
 
 if __name__ == "__main__":

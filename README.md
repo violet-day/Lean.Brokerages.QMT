@@ -9,6 +9,10 @@ The Windows LEAN checkout currently targets .NET 6, so this brokerage targets
 The first milestone locks down the QMT/LEAN boundary with tests before adding
 the concrete `Brokerage` and `IDataQueueHandler` implementations.
 
+Offline development and tests use the uv-managed Python 3.11.13 environment.
+The QMT strategy itself runs inside QMT's trimmed embedded Python 3.6 runtime,
+so the strategy bridge is also checked for Python 3.6 syntax compatibility.
+
 ## Repository layout
 
 ```text
@@ -40,10 +44,16 @@ make test
 
 This command:
 
-1. runs the Python tests locally;
+1. creates/updates the local Python 3.11.13 `.venv` with uv and runs tests;
 2. copies the current worktree, including uncommitted files, to Windows;
 3. preserves the ignored Windows `qmt_local_config.py`;
-4. runs the Python tests and `dotnet test` on Windows.
+4. creates the Windows Python 3.11.13 `.venv` with uv;
+5. runs the Python tests and `dotnet test` on Windows.
+
+Every phase prints a `[qmt-test]` record with its host, stage, status and
+duration. The Windows workflow runs `dotnet build` first, then executes
+`dotnet test --no-build`, so compilation and test execution are visible as
+separate stages. The compiler and NUnit console output are preserved.
 
 To sync without running the Windows tests:
 
@@ -68,8 +78,9 @@ C:\Users\nemo\lean\Lean.Brokerages.QMT
    order or cancel function.
 
 After future Git updates, rerun the existing QMT strategy. The stable entry
-reloads `lean_qmt_readonly_probe.py`, so the file does not need to be imported
-again.
+reloads `lean_qmt_readonly_probe.py` directly from source, so the file does not
+need to be imported again. This avoids `importlib`, which is absent from QMT's
+trimmed Python 3.6 standard library.
 
 Expected log prefixes:
 

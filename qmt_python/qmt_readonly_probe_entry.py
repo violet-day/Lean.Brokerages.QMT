@@ -5,7 +5,6 @@ Import this file into QMT once. The implementation lives in the Git checkout
 and is reloaded every time QMT starts/restarts this strategy.
 """
 
-import importlib
 import os
 import sys
 
@@ -24,9 +23,23 @@ if not os.path.isdir(REPOSITORY_PYTHON_DIRECTORY):
 if REPOSITORY_PYTHON_DIRECTORY not in sys.path:
     sys.path.insert(0, REPOSITORY_PYTHON_DIRECTORY)
 
-import lean_qmt_readonly_probe as _probe
+def _load_source(module_name, source_path):
+    module = type(sys)(module_name)
+    module.__file__ = source_path
+    sys.modules[module_name] = module
+    with open(source_path, "rb") as source_file:
+        source_code = source_file.read()
+    exec(compile(source_code, source_path, "exec"), module.__dict__)
+    return module
 
-_probe = importlib.reload(_probe)
+
+_probe = _load_source(
+    "lean_qmt_readonly_probe",
+    os.path.join(
+        REPOSITORY_PYTHON_DIRECTORY,
+        "lean_qmt_readonly_probe.py",
+    ),
+)
 
 
 def _injected_account_id():

@@ -1,5 +1,6 @@
 qmt_python/qmt_local_config.py
 .codex-sync-manifest
+.venv/
 __pycache__/
 *.py[cod]
 bin/
