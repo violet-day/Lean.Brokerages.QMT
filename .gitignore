@@ -1,5 +1,6 @@
 qmt_python/qmt_local_config.py
 .codex-sync-manifest
+.test-logs/
 .venv/
 __pycache__/
 *.py[cod]

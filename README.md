@@ -57,7 +57,9 @@ development, but it is not part of the authoritative test workflow.
 Every phase prints a `[qmt-test]` record with its host, stage, status and
 duration. The Windows workflow runs `dotnet build` first, then executes
 `dotnet test --no-build`, so compilation and test execution are visible as
-separate stages. The compiler and NUnit console output are preserved.
+separate stages. Remote output is normalized by the Mac process before it
+reaches IDE consoles. The same compiler and NUnit output is always saved to
+`.test-logs/windows-test.log`.
 
 To sync without running the Windows tests:
 

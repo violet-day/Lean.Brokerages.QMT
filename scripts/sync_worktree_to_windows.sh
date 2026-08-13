@@ -28,6 +28,8 @@ trap cleanup EXIT
 file_manifest_path="$temporary_directory/file-manifest.txt"
 package_directory="$temporary_directory/package"
 archive_path="$temporary_directory/worktree.tar.gz"
+test_log_directory="$repository_directory/.test-logs"
+windows_test_log_path="$test_log_directory/windows-test.log"
 
 sync_started_at_seconds="$(date +%s)"
 echo "[qmt-test] host=mac stage=package status=start source=$repository_directory"
@@ -89,10 +91,14 @@ encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-
 
 remote_action_started_at_seconds="$(date +%s)"
 echo "[qmt-test] host=mac stage=windows status=start action=$windows_action"
+mkdir -p "$test_log_directory"
 ssh -S "$control_socket" "$connection_target" \
     "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command" \
-    | tr -d '\r'
+    2>&1 \
+    | tr -d '\r' \
+    | tee "$windows_test_log_path"
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"
 echo "[qmt-test] host=mac stage=windows status=ok action=$windows_action duration_seconds=$remote_action_duration_seconds"
+echo "[qmt-test] host=mac stage=windows-log path=$windows_test_log_path"
 echo "[qmt-test] host=mac stage=sync status=ok duration_seconds=$sync_duration_seconds"
