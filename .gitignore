@@ -1,6 +1,8 @@
 qmt_python/qmt_local_config.py
+.codex-sync-manifest
 __pycache__/
 *.py[cod]
+bin/
+obj/
 .idea/
 .DS_Store
-

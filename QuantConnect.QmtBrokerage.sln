@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantConnect.QmtBrokerage", "QuantConnect.QmtBrokerage\QuantConnect.QmtBrokerage.csproj", "{AAB5B71B-A4E1-4C81-A449-7CD0A60B7335}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantConnect.QmtBrokerage.Tests", "QuantConnect.QmtBrokerage.Tests\QuantConnect.QmtBrokerage.Tests.csproj", "{3EB22A39-8902-4DFE-BB68-06459A67C21B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AAB5B71B-A4E1-4C81-A449-7CD0A60B7335}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AAB5B71B-A4E1-4C81-A449-7CD0A60B7335}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AAB5B71B-A4E1-4C81-A449-7CD0A60B7335}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AAB5B71B-A4E1-4C81-A449-7CD0A60B7335}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3EB22A39-8902-4DFE-BB68-06459A67C21B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3EB22A39-8902-4DFE-BB68-06459A67C21B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3EB22A39-8902-4DFE-BB68-06459A67C21B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3EB22A39-8902-4DFE-BB68-06459A67C21B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
