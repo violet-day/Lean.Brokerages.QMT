@@ -30,6 +30,9 @@ class FakeContextInfo:
 class ReadonlyProbeTests(unittest.TestCase):
     def setUp(self):
         self.probe = importlib.reload(lean_qmt_readonly_probe)
+        self.temporary_module_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_module_directory.cleanup)
+        self.probe.module_directory = self.temporary_module_directory.name
 
     def test_init_runs_read_only_queries_and_subscription(self):
         context_info = FakeContextInfo()
