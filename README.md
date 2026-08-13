@@ -44,11 +44,15 @@ make test
 
 This command:
 
-1. creates/updates the local Python 3.11.13 `.venv` with uv and runs tests;
-2. copies the current worktree, including uncommitted files, to Windows;
-3. preserves the ignored Windows `qmt_local_config.py`;
-4. creates the Windows Python 3.11.13 `.venv` with uv;
-5. runs the Python tests and `dotnet test` on Windows.
+1. copies the current worktree, including uncommitted files, to Windows;
+2. preserves the ignored Windows `qmt_local_config.py`;
+3. creates/updates the Windows Python 3.11.13 `.venv` with uv;
+4. runs all Python compatibility and probe tests on Windows;
+5. builds the C# solution and runs all NUnit tests on Windows.
+
+Mac is only the source and transport host for `make test`; no tests execute on
+Mac. The uv-managed Mac Python 3.11.13 environment remains available for
+development, but it is not part of the authoritative test workflow.
 
 Every phase prints a `[qmt-test]` record with its host, stage, status and
 duration. The Windows workflow runs `dotnet build` first, then executes

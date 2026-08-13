@@ -1,15 +1,9 @@
-.PHONY: test test-local test-windows sync-windows
-
-UV ?= uv
+.PHONY: test test-windows sync-windows
 
 test:
-	@echo '[qmt-test] host=mac stage=all status=start workflow="local tests -> sync -> Windows build -> Windows tests"'
-	@$(MAKE) --no-print-directory test-local
-	@$(MAKE) --no-print-directory test-windows
+	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build -> Windows NUnit tests"'
+	@./scripts/sync_worktree_to_windows.sh --test
 	@echo '[qmt-test] host=mac stage=all status=ok'
-
-test-local:
-	@UV=$(UV) ./scripts/test_local.sh
 
 test-windows:
 	@./scripts/sync_worktree_to_windows.sh --test
