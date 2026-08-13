@@ -37,17 +37,15 @@ def _injected_account_id():
     return ""
 
 
-def _injected_function(function_name):
-    function = globals().get(function_name)
-    return function if callable(function) else None
-
-
 def init(ContextInfo):
+    try:
+        trade_detail_query = get_trade_detail_data
+    except NameError:
+        trade_detail_query = None
+
     return _probe.init(
         ContextInfo,
-        get_trade_detail_data_function=_injected_function(
-            "get_trade_detail_data"
-        ),
+        get_trade_detail_data_function=trade_detail_query,
         injected_account_id=_injected_account_id(),
     )
 
@@ -78,4 +76,3 @@ def orderError_callback(ContextInfo, orderArgs, errorMessage):
         orderArgs,
         errorMessage,
     )
-
