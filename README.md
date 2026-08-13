@@ -13,6 +13,9 @@ Offline development and tests use the uv-managed Python 3.11.13 environment.
 The QMT strategy itself runs inside QMT's trimmed embedded Python 3.6 runtime,
 so the strategy bridge is also checked for Python 3.6 syntax compatibility.
 
+Development status, deployment architecture and the tracked implementation
+checklist are maintained in [ROADMAP.md](ROADMAP.md).
+
 ## Repository layout
 
 ```text
