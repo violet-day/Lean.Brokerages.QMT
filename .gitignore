@@ -1,0 +1,6 @@
+qmt_python/qmt_local_config.py
+__pycache__/
+*.py[cod]
+.idea/
+.DS_Store
+
