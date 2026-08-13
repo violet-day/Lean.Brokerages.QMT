@@ -90,7 +90,8 @@ encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-
 remote_action_started_at_seconds="$(date +%s)"
 echo "[qmt-test] host=mac stage=windows status=start action=$windows_action"
 ssh -S "$control_socket" "$connection_target" \
-    "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command"
+    "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command" \
+    | tr -d '\r'
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"
 echo "[qmt-test] host=mac stage=windows status=ok action=$windows_action duration_seconds=$remote_action_duration_seconds"
