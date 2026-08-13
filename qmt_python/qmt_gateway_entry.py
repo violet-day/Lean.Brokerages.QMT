@@ -1,9 +1,5 @@
 # coding: gbk
-"""Stable Big QMT strategy entry.
-
-Import this file into QMT once. The implementation lives in the Git checkout
-and is reloaded every time QMT starts/restarts this strategy.
-"""
+"""Stable QMT strategy entry for the LEAN QMT Gateway."""
 
 import os
 import sys
@@ -23,6 +19,7 @@ if not os.path.isdir(REPOSITORY_PYTHON_DIRECTORY):
 if REPOSITORY_PYTHON_DIRECTORY not in sys.path:
     sys.path.insert(0, REPOSITORY_PYTHON_DIRECTORY)
 
+
 def _load_source(module_name, source_path):
     module = type(sys)(module_name)
     module.__file__ = source_path
@@ -34,11 +31,11 @@ def _load_source(module_name, source_path):
     return module
 
 
-_probe = _load_source(
-    "lean_qmt_readonly_probe",
+_gateway_module = _load_source(
+    "lean_qmt_gateway",
     os.path.join(
         REPOSITORY_PYTHON_DIRECTORY,
-        "lean_qmt_readonly_probe.py",
+        "lean_qmt_gateway.py",
     ),
 )
 
@@ -51,41 +48,55 @@ def _injected_account_id():
     return ""
 
 
-def init(ContextInfo):
-    try:
-        trade_detail_query = get_trade_detail_data
-    except NameError:
-        trade_detail_query = None
+def _injected_function(function_name):
+    function = globals().get(function_name)
+    if callable(function):
+        return function
+    return None
 
-    return _probe.init(
+
+def init(ContextInfo):
+    return _gateway_module.init(
         ContextInfo,
-        get_trade_detail_data_function=trade_detail_query,
+        get_trade_detail_data_function=_injected_function(
+            "get_trade_detail_data"
+        ),
+        passorder_function=_injected_function("passorder"),
+        cancel_function=_injected_function("cancel"),
         injected_account_id=_injected_account_id(),
     )
 
 
 def handlebar(ContextInfo):
-    return _probe.handlebar(ContextInfo)
+    return _gateway_module.handlebar(ContextInfo)
+
+
+def qmt_gateway_timer_callback(ContextInfo):
+    return _gateway_module.qmt_gateway_timer_callback(ContextInfo)
+
+
+def stop(ContextInfo):
+    return _gateway_module.stop(ContextInfo)
 
 
 def account_callback(ContextInfo, accountInfo):
-    return _probe.account_callback(ContextInfo, accountInfo)
+    return _gateway_module.account_callback(ContextInfo, accountInfo)
 
 
 def order_callback(ContextInfo, orderInfo):
-    return _probe.order_callback(ContextInfo, orderInfo)
+    return _gateway_module.order_callback(ContextInfo, orderInfo)
 
 
 def deal_callback(ContextInfo, dealInfo):
-    return _probe.deal_callback(ContextInfo, dealInfo)
+    return _gateway_module.deal_callback(ContextInfo, dealInfo)
 
 
 def position_callback(ContextInfo, positionInfo):
-    return _probe.position_callback(ContextInfo, positionInfo)
+    return _gateway_module.position_callback(ContextInfo, positionInfo)
 
 
 def orderError_callback(ContextInfo, orderArgs, errorMessage):
-    return _probe.order_error_callback(
+    return _gateway_module.order_error_callback(
         ContextInfo,
         orderArgs,
         errorMessage,

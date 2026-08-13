@@ -2,7 +2,7 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <TargetFramework>net6.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Product>QuantConnect.Brokerages.Qmt</Product>
     <AssemblyName>QuantConnect.Brokerages.Qmt</AssemblyName>
     <RootNamespace>QuantConnect.Brokerages.Qmt</RootNamespace>
@@ -12,6 +12,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <Description>QuantConnect LEAN brokerage integration for QMT</Description>
   </PropertyGroup>
 
@@ -21,5 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Lean\Common\QuantConnect.csproj" />
+    <ProjectReference Include="..\..\Lean\Brokerages\QuantConnect.Brokerages.csproj" />
+    <ProjectReference Include="..\..\Lean\Engine\QuantConnect.Lean.Engine.csproj" />
   </ItemGroup>
 </Project>

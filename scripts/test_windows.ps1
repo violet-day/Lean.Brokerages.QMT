@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$SourcePath,
 
-    [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
+    [string]$RepositoryPath = "C:\Users\nemo\lean-net10\Lean.Brokerages.QMT",
 
     [ValidateSet("sync", "test")]
     [string]$Action = "test"
@@ -133,10 +133,17 @@ try {
     $pythonTestsDurationMilliseconds = [int]((Get-Date) - $pythonTestsStartedAt).TotalMilliseconds
     Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=ok duration_ms=$pythonTestsDurationMilliseconds"
 
-    $dotnetVersion = & dotnet --version
+    $dotnetExecutable = Join-Path $env:USERPROFILE ".dotnet\dotnet.exe"
+    if (-not (Test-Path -LiteralPath $dotnetExecutable)) {
+        throw ".NET 10 SDK is missing: $dotnetExecutable"
+    }
+    $dotnetVersion = & $dotnetExecutable --version
+    if (-not $dotnetVersion.StartsWith("10.")) {
+        throw "Expected .NET 10 SDK, found $dotnetVersion."
+    }
     $dotnetBuildStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion command=`"dotnet build QuantConnect.QmtBrokerage.sln --configuration Release`""
-    $commandExitCode = Invoke-WindowsTestCommand "dotnet" @("build", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--nologo", "--verbosity", "minimal")
+    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion command=`"$dotnetExecutable build QuantConnect.QmtBrokerage.sln --configuration Release`""
+    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--nologo", "--verbosity", "minimal")
     if ($commandExitCode -ne 0) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=failed exit_code=$commandExitCode"
         throw ".NET build failed with exit code $commandExitCode."
@@ -146,7 +153,7 @@ try {
 
     $dotnetTestsStartedAt = Get-Date
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start command=`"dotnet test QuantConnect.QmtBrokerage.sln --no-build`""
-    $commandExitCode = Invoke-WindowsTestCommand "dotnet" @("test", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal")
+    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal")
     if ($commandExitCode -ne 0) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=failed exit_code=$commandExitCode"
         throw ".NET tests failed with exit code $commandExitCode."

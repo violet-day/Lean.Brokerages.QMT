@@ -11,6 +11,12 @@ import sys
 import time
 
 
+module_directory = globals().get(
+    "module_directory",
+    os.path.dirname(os.path.abspath(globals().get("__file__", ""))),
+)
+
+
 LOG_PREFIX = "[lean_qmt_probe]"
 ACCOUNT_TYPE = "STOCK"
 HISTORY_FIELDS = ["time", "open", "high", "low", "close", "volume"]
@@ -40,7 +46,7 @@ def _log(message, **fields):
 
 def _load_config():
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        module_directory,
         "qmt_local_config.py",
     )
     if not os.path.isfile(config_path):

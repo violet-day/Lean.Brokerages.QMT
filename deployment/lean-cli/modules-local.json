@@ -1,0 +1,92 @@
+{
+  "modules": [
+    {
+      "configurations": [
+        {
+          "help": "The QMT Gateway host reachable from the LEAN container",
+          "id": "qmt-gateway-host",
+          "input-default": "host.docker.internal",
+          "input-method": "prompt",
+          "optional": true,
+          "prompt-info": "QMT Gateway host",
+          "type": "input"
+        },
+        {
+          "help": "The QMT Gateway TCP port",
+          "id": "qmt-gateway-port",
+          "input-default": "17890",
+          "input-method": "prompt",
+          "optional": true,
+          "prompt-info": "QMT Gateway port",
+          "type": "input"
+        },
+        {
+          "help": "The expected QMT account ID",
+          "id": "qmt-account-id",
+          "input-method": "prompt",
+          "prompt-info": "QMT account ID",
+          "type": "input"
+        },
+        {
+          "help": "QMT Gateway request timeout in seconds",
+          "id": "qmt-request-timeout",
+          "input-default": "10",
+          "input-method": "prompt",
+          "optional": true,
+          "prompt-info": "QMT request timeout",
+          "type": "input"
+        },
+        {
+          "help": "Enable LEAN order and cancel requests only after simulation validation",
+          "id": "qmt-trading-enabled",
+          "input-default": false,
+          "input-method": "confirm",
+          "optional": true,
+          "prompt-info": "Enable QMT trading",
+          "type": "input"
+        },
+        {
+          "filters": [
+            {
+              "condition": {
+                "dependent-config-id": "type",
+                "pattern": "brokerage",
+                "type": "exact-match"
+              }
+            }
+          ],
+          "id": "live-mode-brokerage",
+          "type": "info",
+          "value": "QmtBrokerage"
+        },
+        {
+          "filters": [
+            {
+              "condition": {
+                "dependent-config-id": "type",
+                "pattern": "data-queue-handler",
+                "type": "exact-match"
+              }
+            }
+          ],
+          "id": "data-queue-handler",
+          "type": "info",
+          "value": "[\"QmtBrokerage\"]"
+        }
+      ],
+      "display-id": "QMT",
+      "id": "QmtBrokerage",
+      "installs": false,
+      "live-cash-balance-state": "not-supported",
+      "live-holdings-state": "not-supported",
+      "platform": [
+        "local",
+        "cli"
+      ],
+      "type": [
+        "brokerage",
+        "data-queue-handler"
+      ]
+    }
+  ]
+}

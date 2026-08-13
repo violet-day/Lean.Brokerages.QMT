@@ -1,102 +1,193 @@
 # Lean.Brokerages.QMT
 
-LEAN brokerage integration for the Guojin Big QMT client. The repository uses
-the same solution/library/NUnit-test layout as QuantConnect's official
-[`Lean.Brokerages.Template`](https://github.com/QuantConnect/Lean.Brokerages.Template).
+LEAN Brokerage integration for the Guojin Big QMT client. QMT is the brokerage
+and execution adapter; the MVP market scope is China A-share equities on the
+Shanghai, Shenzhen, and Beijing exchanges.
 
-The Windows LEAN checkout currently targets .NET 6, so this brokerage targets
-`net6.0` even though the latest upstream template targets a newer .NET version.
-The first milestone locks down the QMT/LEAN boundary with tests before adding
-the concrete `Brokerage` and `IDataQueueHandler` implementations.
+The repository follows QuantConnect's
+[`Lean.Brokerages.Template`](https://github.com/QuantConnect/Lean.Brokerages.Template)
+layout. The C# projects and both LEAN checkouts target .NET 10. Offline Python
+development uses Python 3.11.13, while the code loaded by QMT remains compatible
+with QMT's customized Python 3.6.8 runtime.
 
-Offline development and tests use the uv-managed Python 3.11.13 environment.
-The QMT strategy itself runs inside QMT's trimmed embedded Python 3.6 runtime,
-so the strategy bridge is also checked for Python 3.6 syntax compatibility.
+The Mac and Windows LEAN checkouts are fixed to commit
+`d72852f25e81cf4505a9059fc037c7c49cd21825`.
 
-Development status, deployment architecture and the tracked implementation
-checklist are maintained in [ROADMAP.md](ROADMAP.md).
+## MVP status
+
+Implemented and covered by fake-Gateway tests:
+
+- NDJSON-over-TCP protocol v1 with account-checked `hello`, request IDs,
+  timeouts, errors, events, and duplicate-request caching;
+- account cash, positions, and open-order queries;
+- China A-share symbol conversion for `.SH`, `.SZ`, and `.BJ` codes;
+- Market and Limit orders, cancel, and an explicit unsupported result for
+  order updates;
+- tick subscriptions and quote conversion to LEAN data;
+- QMT order/deal callbacks converted to LEAN `OrderEvent` instances;
+- `QmtBrokerageFactory`, `QmtBrokerageModel`, `QmtBrokerage`, and the shared
+  `IDataQueueHandler` instance;
+- two independent trading switches, both disabled by default.
+
+Not yet production-ready:
+
+- no simulated-account end-to-end run against a real QMT process;
+- no automatic reconnect, resubscription, startup reconciliation, or event
+  deduplication after reconnect;
+- no LEAN image or `lean-cli` module integration;
+- no full trading-day soak, network interruption, or restart test;
+- no final field validation from captured real QMT query/callback logs.
+
+The protocol contract is recorded in
+[`docs/adr/0001-qmt-gateway-protocol.md`](docs/adr/0001-qmt-gateway-protocol.md).
+The remaining deployment work is tracked in [ROADMAP.md](ROADMAP.md).
+
+QMT is the Brokerage name, not the LEAN market ID. Add China equities with:
+
+```python
+self.add_equity("600000", Resolution.MINUTE, market="china")
+```
+
+The plugin registers the `china` market ID, Shanghai time zone, weekday
+09:30–11:30/13:00–15:00 sessions, CNY quote currency, and a 0.01 price step.
+The China holiday calendar is still a production-readiness item.
 
 ## Repository layout
 
 ```text
-QuantConnect.QmtBrokerage.sln
 QuantConnect.QmtBrokerage/
-  QmtSecurityCode.cs           QMT stock-code parser
-  QmtOrderStatusMapper.cs      QMT-to-LEAN order status mapping
-  QmtTradeDetailType.cs        Big QMT read-only query constants
+  QmtBrokerage.cs             LEAN Brokerage and live-data adapter
+  QmtBrokerageFactory.cs      LEAN factory/configuration wiring
+  QmtBrokerageModel.cs        MVP order and security capabilities
+  QmtGatewayClient.cs         NDJSON TCP client
+  QmtProtocol.cs              Protocol v1 DTOs
+  QmtSymbolMapper.cs          China A-share/QMT code conversion
 QuantConnect.QmtBrokerage.Tests/
-  ...                          NUnit contract tests
+  QmtFakeGatewayServer.cs     Loopback-only fake Gateway
+  ...                         Brokerage, client, mapping, and contract tests
 qmt_python/
-  qmt_readonly_probe_entry.py  Stable file imported into QMT once
-  lean_qmt_readonly_probe.py   Reloadable implementation synced by Git
-  qmt_local_config.example.py  Local settings template
-scripts/
-  sync_worktree_to_windows.sh  Sync current worktree over SSH
-  test_windows.ps1             Run Windows Python and .NET tests
+  qmt_gateway_entry.py        Stable code copied into a QMT strategy once
+  lean_qmt_gateway.py         Reloadable Gateway implementation
+  qmt_local_config.example.py Local configuration template
+  qmt_readonly_probe_entry.py Earlier read-only diagnostic entry
 tests/
-  test_qmt_readonly_probe.py   Offline fake-QMT tests
+  test_qmt_gateway.py         Fake-QMT Python tests
+  ...                         Compatibility and read-only probe tests
+scripts/
+  sync_worktree_to_windows.sh Worktree sync over SSH
+  test_windows.ps1            Authoritative Windows test runner
+deployment/
+  lean-cli/modules-local.json Durable local lean-cli QMT module
+  smoke/                       Fake-only live deployment project
 ```
 
-## Tests
+The complete custom-engine and lean-cli deployment procedure is documented in
+[`docs/windows-deployment.md`](docs/windows-deployment.md).
 
-From the repository root on the Mac:
+## Authoritative tests
+
+Run from the repository root on the Mac:
 
 ```bash
 make test
 ```
 
-This command:
+The command packages the current worktree, including uncommitted files, sends
+it to Windows, then runs Python tests, `dotnet build`, and NUnit tests on
+Windows. It does not connect to a real QMT process and it never submits an
+order. All Gateway/Brokerage network tests use a loopback fake server and fake
+QMT functions.
 
-1. copies the current worktree, including uncommitted files, to Windows;
-2. preserves the ignored Windows `qmt_local_config.py`;
-3. creates/updates the Windows Python 3.11.13 `.venv` with uv;
-4. runs all Python compatibility and probe tests on Windows;
-5. builds the C# solution and runs all NUnit tests on Windows.
+The authoritative Windows checkout is:
 
-Mac is only the source and transport host for `make test`; no tests execute on
-Mac. The uv-managed Mac Python 3.11.13 environment remains available for
-development, but it is not part of the authoritative test workflow.
+```text
+C:\Users\nemo\lean-net10\Lean.Brokerages.QMT
+```
 
-Every phase prints a `[qmt-test]` record with its host, stage, status and
-duration. The Windows workflow runs `dotnet build` first, then executes
-`dotnet test --no-build`, so compilation and test execution are visible as
-separate stages. Remote output is normalized by the Mac process before it
-reaches IDE consoles. The same compiler and NUnit output is always saved to
-`.test-logs/windows-test.log`.
+The Windows runner requires .NET 10 from
+`C:\Users\nemo\.dotnet\dotnet.exe` and Python 3.11.13 in the repository
+`.venv`. Mac is the source/transport host; Windows build and test results are
+authoritative. Structured stage output and the complete remote output are
+saved to:
 
-To sync without running the Windows tests:
+```text
+.test-logs/windows-test.log
+```
+
+Latest recorded Windows evidence:
+
+```text
+Python: 14/14 passed
+.NET build: 0 errors
+NUnit: 51/51 passed
+```
+
+To synchronize without testing:
 
 ```bash
 make sync-windows
 ```
 
-The Windows checkout is:
+To install the Windows LEAN/lean-cli integration, build the custom image, and
+run the fake-only deployment smoke test:
 
-```text
-C:\Users\nemo\lean\Lean.Brokerages.QMT
+```bash
+make install-windows
+make image
+make test-deployment
 ```
 
-## One-time QMT setup
+## One-time QMT Gateway setup
 
-1. Copy `qmt_python\qmt_local_config.example.py` to
-   `qmt_python\qmt_local_config.py` and set `ACCOUNT_ID` locally. The local file
-   is ignored by Git.
-2. Copy/import only `qmt_python\qmt_readonly_probe_entry.py` into Big QMT once.
-3. Add the strategy to model trading and select the account.
-4. Run it in live mode to enable account callbacks. This probe never calls an
-   order or cancel function.
+QMT must be logged in and the Gateway strategy must be started manually. The
+repository scripts do not start, stop, restart, or operate the QMT client.
 
-After future Git updates, rerun the existing QMT strategy. The stable entry
-reloads `lean_qmt_readonly_probe.py` directly from source, so the file does not
-need to be imported again. This avoids `importlib`, which is absent from QMT's
-trimmed Python 3.6 standard library.
+1. Synchronize the repository to Windows with `make sync-windows`.
+2. On Windows, create the ignored local configuration:
 
-Expected log prefixes:
+   ```powershell
+   Set-Location C:\Users\nemo\lean-net10\Lean.Brokerages.QMT
+   Copy-Item qmt_python\qmt_local_config.example.py qmt_python\qmt_local_config.py
+   ```
+
+3. Set `ACCOUNT_ID` in `qmt_python\qmt_local_config.py`. Leave
+   `TRADING_ENABLED = False` for read-only and automated validation.
+4. In the Big QMT strategy editor, create/open a strategy and copy the complete
+   contents of `qmt_python\qmt_gateway_entry.py` into it once. The QMT model
+   import dialog accepts packaged strategy files, so do not try to import this
+   source directory through that dialog.
+5. Select the intended QMT account and manually run the strategy. A successful
+   start includes logs similar to:
+
+   ```text
+   [lean_qmt_gateway] init_start ...
+   [lean_qmt_gateway] server_started bind_host=127.0.0.1 bind_port=17890 trading_enabled=False
+   [lean_qmt_gateway] init_complete ...
+   ```
+
+The entry file loads
+`C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py`
+from disk each time the strategy starts. After code synchronization, restart
+the existing strategy manually; the entry does not need to be copied again.
+This direct loader avoids `importlib`, which is absent from QMT's trimmed
+Python 3.6 runtime.
+
+The default `127.0.0.1` binding is suitable for a LEAN process running directly
+on Windows. A Docker deployment will require a protected non-loopback binding,
+`GATEWAY_ALLOW_REMOTE_CLIENTS = True`, and a restrictive Windows firewall rule.
+The protocol is plaintext and unauthenticated; port `17890` must never be
+exposed to the public Internet.
+
+## Trading safety
+
+Trading requires both of these settings to be explicitly enabled:
 
 ```text
-[lean_qmt_probe] init_start
-[lean_qmt_probe] query_ok type=ACCOUNT
-[lean_qmt_probe] query_ok type=POSITION
-[lean_qmt_probe] history_ok
-[lean_qmt_probe] quote_subscription_ok
+QMT qmt_local_config.py: TRADING_ENABLED = True
+LEAN config:             qmt-trading-enabled = true
 ```
+
+If either is false, `PlaceOrder()` and `CancelOrder()` are blocked. Keep both
+false until the fake-Gateway suite, real-QMT read-only validation, and the
+simulated-account checklist in ROADMAP.md have passed. Enabling either setting
+is an operator decision and is never part of `make test`.

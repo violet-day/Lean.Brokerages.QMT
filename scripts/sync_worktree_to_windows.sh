@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
+windows_repository_directory='C:\Users\nemo\lean-net10\Lean.Brokerages.QMT'
 run_windows_tests=false
 
 if [[ "${1:-}" == "--test" ]]; then
@@ -95,7 +95,7 @@ mkdir -p "$test_log_directory"
 ssh -S "$control_socket" "$connection_target" \
     "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command" \
     2>&1 \
-    | tr -d '\r' \
+    | LC_ALL=C tr -d '\r' \
     | tee "$windows_test_log_path"
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"

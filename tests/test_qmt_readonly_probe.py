@@ -74,13 +74,10 @@ class ReadonlyProbeTests(unittest.TestCase):
         self.assertIn("account_missing", output.getvalue())
 
     def test_load_config_reads_latest_file_without_importlib(self):
-        original_module_file = self.probe.__file__
+        original_module_directory = self.probe.module_directory
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            self.probe.__file__ = os.path.join(
-                temporary_directory,
-                "lean_qmt_readonly_probe.py",
-            )
+            self.probe.module_directory = temporary_directory
             config_path = os.path.join(
                 temporary_directory,
                 "qmt_local_config.py",
@@ -108,7 +105,7 @@ class ReadonlyProbeTests(unittest.TestCase):
                 ("second-account", "000001.SZ", True),
             )
 
-        self.probe.__file__ = original_module_file
+        self.probe.module_directory = original_module_directory
 
 
 if __name__ == "__main__":
