@@ -155,6 +155,36 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         }
 
         [Test]
+        public void EmptyMarketDataEnumeratorDoesNotBlockLiveTimePulses()
+        {
+            var gatewayClient = CreateConnectedGatewayClient(false);
+            gatewayClient.Responses[QmtProtocol.Operations.Subscribe] = Response(
+                QmtProtocol.Operations.Subscribe,
+                new { subscribed = true, subscription_id = "72", stock_code = "600000.SH" });
+            var symbol = _symbolMapper.GetLeanSymbol("600000.SH", SecurityType.Equity, QmtSymbolMapper.MarketName);
+            using var brokerage = new QmtBrokerage(gatewayClient, new FakeOrderProvider(), false);
+            var dataConfig = new SubscriptionDataConfig(
+                typeof(Tick),
+                symbol,
+                Resolution.Tick,
+                TimeZones.Shanghai,
+                TimeZones.Shanghai,
+                false,
+                false,
+                false,
+                tickType: TickType.Quote);
+            using var enumerator = brokerage.Subscribe(dataConfig, null);
+
+            var moveNextTask = Task.Run(() => enumerator.MoveNext());
+
+            Assert.IsTrue(
+                moveNextTask.Wait(TimeSpan.FromSeconds(1)),
+                "An empty live market-data enumerator must not block LEAN time pulses.");
+            Assert.IsTrue(moveNextTask.Result);
+            Assert.IsNull(enumerator.Current);
+        }
+
+        [Test]
         public void ConvertsQuoteAndDealEventsWithoutNetwork()
         {
             var gatewayClient = CreateConnectedGatewayClient(false);

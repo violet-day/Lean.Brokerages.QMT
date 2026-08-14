@@ -848,16 +848,14 @@ namespace QuantConnect.Brokerages.Qmt
 
             public bool MoveNext()
             {
-                try
+                if (_queue.TryTake(out var nextData))
                 {
-                    Current = _queue.Take();
+                    Current = nextData;
                     return true;
                 }
-                catch (InvalidOperationException)
-                {
-                    Current = null!;
-                    return false;
-                }
+
+                Current = null!;
+                return !_queue.IsCompleted;
             }
 
             public void Reset()
