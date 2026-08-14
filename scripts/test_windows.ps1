@@ -11,8 +11,20 @@ $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 [Console]::InputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
-$windowsTestLogPath = Join-Path $RepositoryPath ".test-logs\windows-test-full.log"
-New-Item -ItemType Directory -Path (Split-Path -Parent $windowsTestLogPath) -Force | Out-Null
+$windowsTestLogDirectory = Join-Path $RepositoryPath ".test-logs"
+New-Item -ItemType Directory -Path $windowsTestLogDirectory -Force | Out-Null
+$windowsTestLockPath = Join-Path $windowsTestLogDirectory "windows-test.lock"
+try {
+    $windowsTestLock = [System.IO.File]::Open(
+        $windowsTestLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None)
+}
+catch {
+    throw "Another Windows QMT build/test/package process is already running."
+}
+$windowsTestLogPath = Join-Path $windowsTestLogDirectory "windows-test-full.log"
 [System.IO.File]::WriteAllText($windowsTestLogPath, "", $utf8Encoding)
 
 function Write-WindowsTestLog {
@@ -115,9 +127,17 @@ try {
     if (-not $dotnetVersion.StartsWith("10.")) {
         throw "Expected .NET 10 SDK, found $dotnetVersion."
     }
+    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-server status=start action=shutdown"
+    & $dotnetExecutable build-server shutdown 2>&1 | ForEach-Object {
+        Write-WindowsTestLog ([string]$_)
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw ".NET build-server shutdown failed with exit code $LASTEXITCODE."
+    }
+    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-server status=ok"
     $dotnetBuildStartedAt = Get-Date
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion target_framework=$targetFramework command=`"$dotnetExecutable build QuantConnect.QmtBrokerage.sln --configuration Release`""
-    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--nologo", "--verbosity", "minimal", "-p:TargetFramework=$targetFramework")
+    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--nologo", "--verbosity", "minimal", "--disable-build-servers", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:TargetFramework=$targetFramework")
     if ($commandExitCode -ne 0) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=failed exit_code=$commandExitCode"
         throw ".NET build failed with exit code $commandExitCode."
@@ -156,4 +176,5 @@ try {
 }
 finally {
     Pop-Location
+    $windowsTestLock.Dispose()
 }
