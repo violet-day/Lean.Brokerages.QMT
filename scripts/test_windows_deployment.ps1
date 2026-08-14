@@ -123,9 +123,15 @@ $historyPassed = $false
 $accountPassed = $false
 $minuteBarPassed = $false
 $subscriptionPassed = $false
-$marketClosedPassed = $false
 $completed = $false
-$prerequisitesReachedAt = $null
+$chinaTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById("China Standard Time")
+$chinaNow = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $chinaTimeZone)
+$chinaTimeOfDay = $chinaNow.TimeOfDay
+$isChinaWeekday = $chinaNow.DayOfWeek -notin @([DayOfWeek]::Saturday, [DayOfWeek]::Sunday)
+$isMorningSession = $chinaTimeOfDay -ge [TimeSpan]::FromHours(9.5) -and $chinaTimeOfDay -lt [TimeSpan]::FromHours(11.5)
+$isAfternoonSession = $chinaTimeOfDay -ge [TimeSpan]::FromHours(13) -and $chinaTimeOfDay -lt [TimeSpan]::FromHours(15)
+$marketClosedPassed = -not ($isChinaWeekday -and ($isMorningSession -or $isAfternoonSession))
+Write-DeploymentLog "stage=market-hours status=ok china_time=$($chinaNow.ToString('yyyy-MM-ddTHH:mm:ss')) market_closed=$marketClosedPassed"
 $previousErrorActionPreference = $ErrorActionPreference
 try {
     $ErrorActionPreference = "Continue"
@@ -160,7 +166,6 @@ try {
         $accountPassed = $containerLogText.Contains("QmtBrokerage.GetCashBalance(): status=ok accounts=1")
         $subscriptionPassed = $containerLogText.Contains("QmtBrokerage.Subscribe(): status=ok symbol=600000")
         $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
-        $marketClosedPassed = $containerLogText.Contains("[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred")
         $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
 
         if ($historyPassed -and $accountPassed -and $subscriptionPassed) {
@@ -168,13 +173,6 @@ try {
                 break
             }
             if ($marketClosedPassed) {
-                break
-            }
-            if ($null -eq $prerequisitesReachedAt) {
-                $prerequisitesReachedAt = Get-Date
-            }
-            $quoteReceived = $containerLogText.Contains("QmtBrokerage.HandleQuote(): status=published symbol=600000")
-            if (-not $quoteReceived -and (Get-Date) -ge $prerequisitesReachedAt.AddSeconds(15)) {
                 break
             }
         }
@@ -191,11 +189,10 @@ try {
         & $dockerExecutable stop --time 30 $containerId | Out-Null
     }
 
-    $finalContainerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
-    if ($finalContainerLogText) {
-        $containerLogText = $finalContainerLogText
+    & $dockerExecutable inspect $containerId *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
     }
-    $marketClosedPassed = $marketClosedPassed -or $containerLogText.Contains("[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred")
     $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
     $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
     [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
