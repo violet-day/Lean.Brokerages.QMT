@@ -83,6 +83,7 @@ if ($historyProviders -notcontains "BrokerageHistoryProvider") {
 
 $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
 if (-not $gatewayListener) {
+    Write-DeploymentLog "stage=gateway status=failed port=$GatewayPort reason=not-listening"
     throw "The real QMT Gateway is not listening on Windows port $GatewayPort. Run the Gateway strategy manually in QMT first."
 }
 Write-DeploymentLog "stage=gateway status=ok port=$GatewayPort local_address=$($gatewayListener[0].LocalAddress)"
