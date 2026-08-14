@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QuantConnect.Benchmarks;
 using QuantConnect.Orders;
 using QuantConnect.Securities;
 using QuantConnect.Util;
@@ -89,6 +90,11 @@ namespace QuantConnect.Brokerages.Qmt
         public override decimal GetLeverage(Security security)
         {
             return 1m;
+        }
+
+        public override IBenchmark GetBenchmark(SecurityManager securities)
+        {
+            return new FuncBenchmark(_ => 0m);
         }
     }
 }

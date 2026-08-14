@@ -74,6 +74,14 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Assert.AreEqual(1m, model.GetLeverage(security));
         }
 
+        [Test]
+        public void DefaultBenchmarkDoesNotAddUsdSecurity()
+        {
+            var benchmark = new QmtBrokerageModel().GetBenchmark(null);
+
+            Assert.AreEqual(0m, benchmark.Evaluate(DateTime.UtcNow));
+        }
+
         private static Security CreateSecurity(Symbol symbol)
         {
             return new Security(

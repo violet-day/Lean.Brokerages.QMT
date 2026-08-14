@@ -77,6 +77,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             var holdings = brokerage.GetAccountHoldings();
             var orders = brokerage.GetOpenOrders();
 
+            Assert.AreEqual("CNY", brokerage.AccountBaseCurrency);
             Assert.AreEqual(1234.56m, cash.Single().Amount);
             Assert.AreEqual("CNY", cash.Single().Currency);
             Assert.AreEqual(100m, holdings.Single().Quantity);

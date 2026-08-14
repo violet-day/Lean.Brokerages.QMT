@@ -58,6 +58,7 @@ namespace QuantConnect.Brokerages.Qmt
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _localTradingEnabled = localTradingEnabled;
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
+            AccountBaseCurrency = "CNY";
             _gatewayClient.EventReceived += HandleGatewayEvent;
             _gatewayClient.Disconnected += HandleGatewayDisconnected;
         }
