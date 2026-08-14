@@ -1378,6 +1378,7 @@ def init(
     cancel_function=None,
     down_history_data_function=None,
     injected_account_id="",
+    register_request_pump=True,
 ):
     global _gateway
 
@@ -1456,7 +1457,7 @@ def init(
         _gateway = None
         raise
     run_time_function = getattr(context_info, "run_time", None)
-    if callable(run_time_function):
+    if register_request_pump and callable(run_time_function):
         try:
             run_time_function(
                 REQUEST_PUMP_CALLBACK_NAME,
@@ -1475,7 +1476,7 @@ def init(
                 error=repr(error),
                 fallback="handlebar",
             )
-    else:
+    elif register_request_pump:
         _log("request_pump_unavailable", fallback="handlebar")
     _log("init_complete", account_id=account_id)
     return _gateway

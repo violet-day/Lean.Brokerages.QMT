@@ -73,6 +73,7 @@ LEAN PlaceOrder
 
 - [x] `qmt_gateway_entry.py` 作为只复制一次的稳定 QMT 入口。
 - [x] 从 Windows Git 工作区直接加载 `lean_qmt_gateway.py`，不依赖 `importlib`。
+- [x] Git 同步后自动热重载 Gateway；加载或初始化失败时保留/恢复旧版本。
 - [x] TCP 线程只收发和排队；QMT `handlebar` 线程执行 QMT API。
 - [x] 实现账号握手和默认关闭的交易开关。
 - [x] 实现 ACCOUNT、POSITION、ORDER 查询及字段归一化。
@@ -116,8 +117,8 @@ LEAN PlaceOrder
 5. 用户手工选择账号并运行策略；自动化不得启动、停止或重启 QMT。
 6. 检查 `[lean_qmt_gateway] server_started ... trading_enabled=False`。
 
-入口每次启动都会读取工作区内最新 `lean_qmt_gateway.py`。后续同步代码后，只需由
-用户手工重新运行已有策略，不需要再次复制入口。
+入口每 500ms 检查工作区内的 `lean_qmt_gateway.py`。Git 同步后会自动热重载，
+不再要求用户手工重新运行策略。旧入口升级到热重载入口时需要最后手工运行一次。
 
 ## 安全边界
 

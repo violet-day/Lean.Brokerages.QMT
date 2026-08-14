@@ -165,12 +165,14 @@ repository scripts do not start, stop, restart, or operate the QMT client.
    [lean_qmt_gateway] init_complete ...
    ```
 
-The entry file loads
+The entry file watches
 `C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py`
-from disk each time the strategy starts. After code synchronization, restart
-the existing strategy manually; the entry does not need to be copied again.
-This direct loader avoids `importlib`, which is absent from QMT's trimmed
-Python 3.6 runtime.
+and automatically reloads it after Git synchronization. It compiles the new
+source before stopping the current Gateway, does not register a second timer,
+and rolls back to the previous module if initialization fails. Updating an
+older installed entry to this hot-reload version requires one final manual
+strategy restart; later Gateway changes do not. This direct loader avoids
+`importlib`, which is absent from QMT's trimmed Python 3.6 runtime.
 
 The default `127.0.0.1` binding is suitable for a LEAN process running directly
 on Windows. A Docker deployment will require a protected non-loopback binding,
