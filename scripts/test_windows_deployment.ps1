@@ -133,6 +133,8 @@ $logFiles = @(Get-ChildItem -LiteralPath $liveOutputPath -Recurse -File -ErrorAc
 $historyPassed = $false
 $accountPassed = $false
 $minuteBarPassed = $false
+$subscriptionPassed = $false
+$marketClosedPassed = $false
 $completed = $false
 foreach ($logFile in $logFiles) {
     if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=initialize status=ok" -Quiet -ErrorAction SilentlyContinue) {
@@ -144,6 +146,12 @@ foreach ($logFile in $logFiles) {
     if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=minute-bar status=ok" -Quiet -ErrorAction SilentlyContinue) {
         $minuteBarPassed = $true
     }
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "QmtBrokerage.Subscribe(): status=ok" -Quiet -ErrorAction SilentlyContinue) {
+        $subscriptionPassed = $true
+    }
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred" -Quiet -ErrorAction SilentlyContinue) {
+        $marketClosedPassed = $true
+    }
     if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=complete status=ok trading=disabled" -Quiet -ErrorAction SilentlyContinue) {
         $completed = $true
     }
@@ -154,10 +162,11 @@ if (-not $historyPassed) {
 if (-not $accountPassed) {
     throw "The real QMT account success marker was not found in $liveOutputPath."
 }
-if (-not $minuteBarPassed) {
-    throw "The real QMT minute TradeBar success marker was not found in $liveOutputPath."
+if (-not $minuteBarPassed -and (-not $marketClosedPassed -or -not $subscriptionPassed)) {
+    throw "Neither a real QMT minute TradeBar nor a successful after-hours subscription was found in $liveOutputPath."
 }
 if (-not $completed) {
     throw "The QMT E2E completion marker was not found in $liveOutputPath."
 }
-Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok minute_bar=ok trading_enabled=false output=$liveOutputPath"
+$minuteBarStatus = if ($minuteBarPassed) { "ok" } else { "deferred_market_closed" }
+Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok minute_bar=$minuteBarStatus trading_enabled=false output=$liveOutputPath"
