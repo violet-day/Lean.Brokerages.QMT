@@ -116,6 +116,7 @@ $containerId = $null
 $containerLogText = ""
 $historyPassed = $false
 $accountPassed = $false
+$algorithmInitializationPassed = $false
 $minuteBarPassed = $false
 $subscriptionPassed = $false
 $completed = $false
@@ -160,10 +161,11 @@ try {
         $historyPassed = $dailyHistoryPassed -and $minuteHistoryPassed
         $accountPassed = $containerLogText.Contains("QmtBrokerage.GetCashBalance(): status=ok accounts=1")
         $subscriptionPassed = $containerLogText.Contains("QmtBrokerage.Subscribe(): status=ok symbol=600000")
+        $algorithmInitializationPassed = $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
         $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
         $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
 
-        if ($historyPassed -and $accountPassed -and $subscriptionPassed) {
+        if ($historyPassed -and $accountPassed -and $subscriptionPassed -and $algorithmInitializationPassed) {
             if ($minuteBarPassed -and $completed) {
                 break
             }
@@ -188,6 +190,7 @@ try {
     if ($LASTEXITCODE -eq 0) {
         $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
     }
+    $algorithmInitializationPassed = $algorithmInitializationPassed -or $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
     $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
     $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
     [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
@@ -211,8 +214,14 @@ if (-not $accountPassed) {
 if (-not $subscriptionPassed) {
     throw "The real QMT subscription success marker was not found."
 }
+if (-not $algorithmInitializationPassed) {
+    throw "The LEAN algorithm initialization log marker was not found."
+}
+if ($containerLogText.Contains("RuntimeBinderException")) {
+    throw "LEAN raised a Python brokerage callback error during shutdown."
+}
 if (-not ($minuteBarPassed -and $completed) -and -not $marketClosedPassed) {
     throw "Neither a real QMT minute TradeBar nor the closed-market marker was found."
 }
 $minuteBarStatus = if ($minuteBarPassed) { "ok" } else { "deferred_market_closed" }
-Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok minute_bar=$minuteBarStatus trading_enabled=false output_root=$liveRootPath"
+Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_root=$liveRootPath"

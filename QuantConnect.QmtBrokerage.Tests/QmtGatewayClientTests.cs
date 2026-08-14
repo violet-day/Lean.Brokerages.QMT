@@ -235,6 +235,24 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
         [Test]
         [Timeout(5000)]
+        public async Task ExplicitDisconnectDoesNotRaiseDisconnectedEvent()
+        {
+            using var gatewayServer = new QmtFakeGatewayServer();
+            using var gatewayClient = CreateClient(gatewayServer);
+            var disconnectedEvent = new TaskCompletionSource<QmtGatewayDisconnectedEventArgs>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            gatewayClient.Disconnected += (_, eventArguments) => disconnectedEvent.TrySetResult(eventArguments);
+            await gatewayClient.ConnectAsync();
+
+            gatewayClient.Disconnect();
+            var firstCompletedTask = await Task.WhenAny(disconnectedEvent.Task, Task.Delay(200));
+
+            Assert.That(firstCompletedTask, Is.Not.SameAs(disconnectedEvent.Task));
+            Assert.That(gatewayClient.IsConnected, Is.False);
+        }
+
+        [Test]
+        [Timeout(5000)]
         public async Task FailsPendingRequestsAndRaisesDisconnectedEvent()
         {
             using var gatewayServer = new QmtFakeGatewayServer();

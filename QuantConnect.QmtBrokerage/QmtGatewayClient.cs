@@ -249,6 +249,7 @@ namespace QuantConnect.Brokerages.Qmt
 
         public void Disconnect()
         {
+            Interlocked.Exchange(ref _disconnectNotificationSent, 1);
             Interlocked.Exchange(ref _isConnected, 0);
             ServerInformation = null;
             CloseTransport();
