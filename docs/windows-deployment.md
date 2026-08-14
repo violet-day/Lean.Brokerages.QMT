@@ -132,6 +132,8 @@ make test-live        # 真实 QMT 只读完整部署 smoke
 
 ```text
 .test-logs/windows-test.log
+.test-logs/windows-test-full.log
 .test-logs/windows-deployment-install.log
 .test-logs/windows-deployment-test.log
+.test-logs/windows-live-test.log
 ```

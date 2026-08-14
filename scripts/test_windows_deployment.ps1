@@ -11,11 +11,16 @@ $ProgressPreference = "SilentlyContinue"
 $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
+$liveTestLogPath = Join-Path $RepositoryPath ".test-logs\windows-live-test.log"
+New-Item -ItemType Directory -Path (Split-Path -Parent $liveTestLogPath) -Force | Out-Null
+[System.IO.File]::WriteAllText($liveTestLogPath, "", $utf8Encoding)
 
 function Write-DeploymentLog {
     param([string]$Message)
 
-    [Console]::Error.WriteLine("[qmt-live-test] $Message")
+    $logLine = "[qmt-live-test] $Message"
+    [System.IO.File]::AppendAllText($liveTestLogPath, $logLine + "`r`n", $utf8Encoding)
+    [Console]::Error.WriteLine($logLine)
 }
 
 $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
@@ -101,9 +106,15 @@ $leanArguments = @(
     "--output", $liveOutputPath
 )
 Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
-& $leanExecutable @leanArguments
-if ($LASTEXITCODE -ne 0) {
-    throw "lean live deploy failed with exit code $LASTEXITCODE."
+$leanOutput = & $leanExecutable @leanArguments 2>&1
+$leanExitCode = $LASTEXITCODE
+if ($leanOutput) {
+    $leanOutputText = ($leanOutput | Out-String)
+    [System.IO.File]::AppendAllText($liveTestLogPath, $leanOutputText, $utf8Encoding)
+    [Console]::Error.Write($leanOutputText)
+}
+if ($leanExitCode -ne 0) {
+    throw "lean live deploy failed with exit code $leanExitCode."
 }
 
 $logFiles = @(Get-ChildItem -LiteralPath $liveOutputPath -Recurse -File -ErrorAction SilentlyContinue)

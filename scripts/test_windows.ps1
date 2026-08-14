@@ -11,10 +11,14 @@ $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 [Console]::InputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
+$windowsTestLogPath = Join-Path $RepositoryPath ".test-logs\windows-test-full.log"
+New-Item -ItemType Directory -Path (Split-Path -Parent $windowsTestLogPath) -Force | Out-Null
+[System.IO.File]::WriteAllText($windowsTestLogPath, "", $utf8Encoding)
 
 function Write-WindowsTestLog {
     param([string]$Message)
 
+    [System.IO.File]::AppendAllText($windowsTestLogPath, $Message + "`r`n", $utf8Encoding)
     [Console]::Error.WriteLine($Message)
 }
 
@@ -43,9 +47,11 @@ function Invoke-WindowsTestCommand {
     $standardOutput = $standardOutputTask.Result
     $standardError = $standardErrorTask.Result
     if ($standardOutput) {
+        [System.IO.File]::AppendAllText($windowsTestLogPath, $standardOutput, $utf8Encoding)
         [Console]::Error.Write($standardOutput)
     }
     if ($standardError) {
+        [System.IO.File]::AppendAllText($windowsTestLogPath, $standardError, $utf8Encoding)
         [Console]::Error.Write($standardError)
     }
 
