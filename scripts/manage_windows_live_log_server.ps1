@@ -3,7 +3,7 @@ param(
     [ValidateSet("Start", "Stop", "Status")]
     [string]$Action,
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
-    [string]$LiveOutputPath = "C:\Users\nemo\lean_project\.qmt-live-smoke-output",
+    [string]$LiveRootPath = "C:\Users\nemo\lean_project\china_smoke_test\live",
     [string]$ContainerName = "qmt-live-logs",
     [string]$NginxImage = "nginx:alpine",
     [string]$AllowedRemoteAddress = "192.168.50.0/24",
@@ -62,7 +62,7 @@ if ($Action -eq "Stop") {
 if (-not (Test-Path -LiteralPath $nginxConfigurationPath)) {
     throw "The Nginx configuration is missing: $nginxConfigurationPath"
 }
-New-Item -ItemType Directory -Path $LiveOutputPath -Force | Out-Null
+New-Item -ItemType Directory -Path $LiveRootPath -Force | Out-Null
 
 if (Test-ContainerExists) {
     & $dockerExecutable rm --force $ContainerName | Out-Null
@@ -108,7 +108,7 @@ $dockerArguments = @(
     "--name", $ContainerName,
     "--restart", "unless-stopped",
     "--publish", "${Port}:80",
-    "--mount", "type=bind,source=$LiveOutputPath,target=/usr/share/nginx/html,readonly",
+    "--mount", "type=bind,source=$LiveRootPath,target=/usr/share/nginx/html,readonly",
     "--mount", "type=bind,source=$nginxConfigurationPath,target=/etc/nginx/conf.d/default.conf,readonly",
     $NginxImage
 )
@@ -134,4 +134,4 @@ if ($httpStatusCode -ne 200) {
     throw "Nginx did not become ready on Windows port $Port."
 }
 
-Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage source=$LiveOutputPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
+Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage source=$LiveRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"

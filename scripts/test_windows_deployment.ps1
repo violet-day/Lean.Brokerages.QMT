@@ -28,7 +28,7 @@ $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
 $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"
 $configurationPath = Join-Path $LeanProjectRoot "lean-qmt.json"
 $liveProjectPath = Join-Path $LeanProjectRoot "china_smoke_test"
-$liveOutputPath = Join-Path $LeanProjectRoot ".qmt-live-smoke-output"
+$liveRootPath = Join-Path $liveProjectPath "live"
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -88,9 +88,6 @@ if (-not $gatewayListener) {
 }
 Write-DeploymentLog "stage=gateway status=ok port=$GatewayPort local_address=$($gatewayListener[0].LocalAddress)"
 
-New-Item -ItemType Directory -Path $liveOutputPath -Force | Out-Null
-Get-ChildItem -LiteralPath $liveOutputPath -Force | Remove-Item -Recurse -Force
-
 $brokerageVolume = @{}
 $brokerageVolume[$brokerageAssemblyPath] = @{
     "bind" = "/Lean/Launcher/bin/Debug/QuantConnect.Brokerages.Qmt.dll"
@@ -107,8 +104,7 @@ $leanArguments = @(
     "--environment", "live-qmt",
     "--detach",
     "--no-update",
-    "--extra-docker-config", $escapedExtraDockerConfiguration,
-    "--output", $liveOutputPath
+    "--extra-docker-config", $escapedExtraDockerConfiguration
 )
 Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
 $existingLeanContainers = @(& $dockerExecutable ps --filter "ancestor=$EngineImage" --format "{{.ID}}")
@@ -219,4 +215,4 @@ if (-not ($minuteBarPassed -and $completed) -and -not $marketClosedPassed) {
     throw "Neither a real QMT minute TradeBar nor the closed-market marker was found."
 }
 $minuteBarStatus = if ($minuteBarPassed) { "ok" } else { "deferred_market_closed" }
-Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok minute_bar=$minuteBarStatus trading_enabled=false output=$liveOutputPath"
+Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok minute_bar=$minuteBarStatus trading_enabled=false output_root=$liveRootPath"
