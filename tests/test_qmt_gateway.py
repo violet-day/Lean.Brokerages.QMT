@@ -46,6 +46,20 @@ class FakeContextInfo:
         self.subscriptions.pop(subscription_id, None)
         return True
 
+    def get_market_data_ex(self, **kwargs):
+        return {
+            kwargs["stock_code"][0]: [
+                {
+                    "time": "20260813093100",
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1200,
+                }
+            ]
+        }
+
 
 def request_message(request_id, operation, payload=None):
     return {
@@ -106,10 +120,19 @@ class QmtGatewayTests(unittest.TestCase):
             return self.query_rows[detail_type]
 
         self.query_trade_detail = query_trade_detail
+        self.history_downloads = []
+
+        def down_history_data(stock_code, period, start_time, end_time):
+            self.history_downloads.append(
+                (stock_code, period, start_time, end_time)
+            )
+
         self.gateway = self.gateway_module.LeanQmtGateway(
             context_info=self.context_info,
             account_id="test-account",
             get_trade_detail_data_function=self.query_trade_detail,
+            down_history_data_function=down_history_data,
+            get_market_data_function=self.context_info.get_market_data_ex,
             subscribe_quote_function=self.context_info.subscribe_quote,
             unsubscribe_quote_function=self.context_info.unsubscribe_quote,
             bind_port=0,
@@ -176,6 +199,43 @@ class QmtGatewayTests(unittest.TestCase):
         self.assertEqual(order["order_type"], "limit")
         self.assertEqual(order["status"], 55)
         self.assertEqual(order["traded_volume"], 100.0)
+
+    def test_query_history_downloads_and_normalizes_qmt_bars(self):
+        response = self.process_request(
+            "query_history",
+            {
+                "stock_code": "600000.SH",
+                "period": "1m",
+                "start_time": "20260813093000",
+                "end_time": "20260813093500",
+            },
+        )
+
+        self.assertTrue(response["success"])
+        self.assertEqual(
+            self.history_downloads,
+            [
+                (
+                    "600000.SH",
+                    "1m",
+                    "20260813093000",
+                    "20260813093500",
+                )
+            ],
+        )
+        self.assertEqual(
+            response["payload"]["bars"],
+            [
+                {
+                    "time": "20260813093100",
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "volume": 1200.0,
+                }
+            ],
+        )
 
     def test_trading_disabled_never_calls_native_functions(self):
         native_call_count = [0]

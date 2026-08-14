@@ -5,7 +5,7 @@
 ```text
 大 QMT（用户手工登录、手工运行 Gateway 策略）
   ↕ host.docker.internal:17890
-自定义 LEAN Engine 镜像（包含 QuantConnect.Brokerages.Qmt.dll）
+官方默认 LEAN Engine 镜像 + 本地 QuantConnect.Brokerages.Qmt.dll
   ↑
 lean-cli live deploy --environment live-qmt
 ```
@@ -13,20 +13,20 @@ lean-cli live deploy --environment live-qmt
 QMT 是 Brokerage，China A-share 是 LEAN market。策略使用：
 
 ```python
-self.add_equity("600000", Resolution.TICK, market="china")
+self.add_equity("600000", Resolution.MINUTE, market="china")
 ```
 
 ## 固定目录
 
 ```text
-C:\Users\nemo\lean-net10\Lean                  LEAN d72852f25
-C:\Users\nemo\lean-net10\Lean.Brokerages.QMT  本仓库
-C:\Users\nemo\lean\lean-cli                    lean-cli 源码
-C:\Users\nemo\lean_project                      策略根目录
+C:\Users\nemo\lean\Lean                  LEAN qmt 分支
+C:\Users\nemo\lean\Lean.Brokerages.QMT  本仓库
+C:\Users\nemo\lean\lean-cli              lean-cli qmt 分支
+C:\Users\nemo\lean_project               策略根目录
 ```
 
-Windows 的 `C:\Users\nemo\.dotnet\dotnet.exe` 是权威 .NET 10。系统 PATH
-中的旧 SDK 不参与构建。
+QMT 使用 Windows 的 .NET 10 SDK 编译。目标框架和模块版本从默认 Engine 镜像标签
+动态读取，不把版本写死在 Makefile。
 
 ## 一次性安装
 
@@ -38,64 +38,54 @@ make install-windows
 
 安装脚本是幂等的，完成三件事：
 
-1. 给 Windows LEAN Launcher 增加指向 sibling QMT csproj 的
-   `ProjectReference`；
-2. 给 Windows lean-cli 增加 `modules-local.json` overlay，使官方模块清单刷新后
-   仍能识别 `QMT` Brokerage 和 data queue；
+1. 验证 lean-cli `qmt` 分支能够识别 `QMT` Brokerage 和 data queue；
+2. 恢复 `quantconnect/lean:latest` 和 `quantconnect/research:latest` 默认镜像；
 3. 从现有 `lean.json` 生成隔离的 `C:\Users\nemo\lean_project\lean-qmt.json`，
    加入 `live-qmt` environment，并强制 `qmt-trading-enabled=false`。
 
 账号只存在 Windows 本地 `lean-qmt.json`，不会写入 Git。原 `lean.json` 不会被覆盖。
-NuGet 不是这条部署链的前置条件；Launcher 的 ProjectReference 会把插件 DLL 和依赖
-直接带入自定义镜像。
+QMT DLL 直接挂载到默认 Engine 容器，不构建自定义镜像，也不生成 NuGet 包。
 
-## 构建镜像
+## 编译和发布本地 Brokerage
 
 首次运行 Docker Desktop 时，需要用户本人在 RDP 会话中接受 Docker Desktop
 许可条款。自动化不能代替用户接受条款。Docker daemon ready 后执行：
 
 ```bash
-make image
+make package-windows
 ```
 
-默认镜像：
+命令依次执行：
 
 ```text
-lean-cli/engine:qmt-20260813-d72852f25-worktree
+Git push/fetch/fast-forward
+→ Windows Python/.NET 测试
+→ dotnet build
+→ 读取 quantconnect/lean:latest 的 lean_version/target_framework
+→ %USERPROFILE%\.lean\modules\QmtBrokerage\<lean_version>\<target_framework>
 ```
 
-脚本在 Windows 使用 .NET 10 构建 Launcher，断言 Launcher output 和
-`deps.json` 都包含 `QuantConnect.Brokerages.Qmt`，构建镜像后再从容器内检查 DLL、
-依赖清单和 .NET runtime。
-
-可用环境变量覆盖 tag：
+## 真实只读全链路验证
 
 ```bash
-QMT_IMAGE_TAG=qmt-YYYYMMDD-<lean-sha>-<qmt-sha> make image
+make test-live
 ```
 
-## fake-only 全链路验证
-
-```bash
-make test-deployment
-```
-
-该命令只启动 `0.0.0.0:17891` 的 standalone fake Gateway，使用假账号
-`deployment-test`，随后执行真实：
+该命令要求用户已在大 QMT 中手工运行真实 Gateway，随后执行：
 
 ```text
 lean-cli
-→ 自定义镜像
+→ quantconnect/lean:latest
+→ 挂载版本匹配的本地 QMT DLL
 → Composer/QmtBrokerageFactory
-→ host.docker.internal:17891
-→ hello/query_account/query_positions/query_orders/subscribe
+→ host.docker.internal:17890
+→ hello/query_account/query_positions/query_orders/query_history/subscribe
 → AddEquity(... market="china")
-→ fake quote
+→ 真实分钟行情
 → clean exit
 ```
 
-脚本会拒绝任何 `place_order` 或 `cancel_order`。它不连接真实 QMT、不读取真实账户、
-不下单，也不启动、停止或重启 QMT 客户端。
+`qmt-trading-enabled=false`，测试不下单，也不启动、停止或重启 QMT 客户端。
 
 ## 只读真实部署
 
@@ -121,8 +111,8 @@ TRADING_ENABLED = False
 lean live deploy C:\Users\nemo\lean_project\<project> `
   --lean-config C:\Users\nemo\lean_project\lean-qmt.json `
   --environment live-qmt `
-  --image lean-cli/engine:qmt-20260813-d72852f25-worktree `
   --no-update `
+  --extra-docker-config <QMT-DLL-volume> `
   --detach
 ```
 
@@ -134,8 +124,8 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 ```bash
 make test             # Windows Python 14/14、.NET build、NUnit 51/51
 make install-windows  # 可重复执行，验证安装幂等性
-make image            # Windows 自定义镜像
-make test-deployment  # fake-only 完整部署 smoke
+make package-windows  # Windows 编译、测试并发布版本化本地 DLL
+make test-live        # 真实 QMT 只读完整部署 smoke
 ```
 
 日志保存在：
@@ -143,7 +133,5 @@ make test-deployment  # fake-only 完整部署 smoke
 ```text
 .test-logs/windows-test.log
 .test-logs/windows-deployment-install.log
-.test-logs/windows-deployment-image.log
 .test-logs/windows-deployment-test.log
-.test-logs/windows-launcher-build.log
 ```

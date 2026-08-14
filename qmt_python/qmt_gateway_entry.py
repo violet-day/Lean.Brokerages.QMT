@@ -63,6 +63,9 @@ def init(ContextInfo):
         ),
         passorder_function=_injected_function("passorder"),
         cancel_function=_injected_function("cancel"),
+        down_history_data_function=_injected_function(
+            "down_history_data"
+        ),
         injected_account_id=_injected_account_id(),
     )
 

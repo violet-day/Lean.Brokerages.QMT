@@ -1,8 +1,9 @@
 param(
-    [string]$RepositoryPath = "C:\Users\nemo\lean-net10\Lean.Brokerages.QMT",
+    [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$LeanProjectRoot = "C:\Users\nemo\lean_project",
-    [string]$ImageTag = "qmt-20260813-d72852f25-worktree",
-    [int]$FakeGatewayPort = 17891
+    [string]$EngineImage = "quantconnect/lean:latest",
+    [string]$ResearchImage = "quantconnect/research:latest",
+    [int]$GatewayPort = 17890
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,109 +15,126 @@ $OutputEncoding = $utf8Encoding
 function Write-DeploymentLog {
     param([string]$Message)
 
-    [Console]::Error.WriteLine("[qmt-deploy] $Message")
+    [Console]::Error.WriteLine("[qmt-live-test] $Message")
 }
 
 $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
 $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"
-$pythonExecutable = Join-Path $RepositoryPath ".venv\Scripts\python.exe"
-$baseConfigurationPath = Join-Path $LeanProjectRoot "lean-qmt.json"
-$smokeConfigurationPath = Join-Path $LeanProjectRoot "lean-qmt-smoke.json"
-$smokeProjectPath = Join-Path $LeanProjectRoot "qmt-deployment-smoke"
-$fakeGatewayOutputPath = Join-Path $RepositoryPath ".test-logs\fake-gateway-output.log"
-$fakeGatewayStandardOutputPath = Join-Path $RepositoryPath ".test-logs\fake-gateway-standard-output.log"
-$liveOutputPath = Join-Path $RepositoryPath ".test-logs\deployment-smoke-output"
-$imageName = "lean-cli/engine:$ImageTag"
-$fakeAccountId = "deployment-test"
+$configurationPath = Join-Path $LeanProjectRoot "lean-qmt.json"
+$liveProjectPath = Join-Path $LeanProjectRoot "china_smoke_test"
+$liveOutputPath = Join-Path $RepositoryPath ".test-logs\live-smoke-output"
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "Docker Desktop is not ready."
 }
-if (-not (Test-Path -LiteralPath $pythonExecutable)) {
-    throw "The QMT repository Python environment is missing: $pythonExecutable"
+if (-not (Test-Path -LiteralPath $leanExecutable)) {
+    throw "lean-cli is missing: $leanExecutable"
+}
+if (-not (Test-Path -LiteralPath $configurationPath)) {
+    throw "The QMT LEAN configuration is missing: $configurationPath"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $liveProjectPath ".git"))) {
+    throw "The Git smoke project is missing: $liveProjectPath"
 }
 
-$smokeConfiguration = Get-Content -LiteralPath $baseConfigurationPath -Raw | ConvertFrom-Json
-$smokeConfiguration | Add-Member -NotePropertyName "qmt-gateway-host" -NotePropertyValue "host.docker.internal" -Force
-$smokeConfiguration | Add-Member -NotePropertyName "qmt-gateway-port" -NotePropertyValue ([string]$FakeGatewayPort) -Force
-$smokeConfiguration | Add-Member -NotePropertyName "qmt-account-id" -NotePropertyValue $fakeAccountId -Force
-$smokeConfiguration | Add-Member -NotePropertyName "qmt-request-timeout" -NotePropertyValue "10" -Force
-$smokeConfiguration | Add-Member -NotePropertyName "qmt-trading-enabled" -NotePropertyValue "false" -Force
-[System.IO.File]::WriteAllText(
-    $smokeConfigurationPath,
-    (($smokeConfiguration | ConvertTo-Json -Depth 100) + "`n"),
-    $utf8Encoding)
-
-if (Test-Path -LiteralPath $smokeProjectPath) {
-    Remove-Item -LiteralPath $smokeProjectPath -Recurse -Force
+& $leanExecutable config set engine-image $EngineImage
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not restore the default LEAN engine image."
 }
-Copy-Item -LiteralPath (Join-Path $RepositoryPath "deployment\smoke") -Destination $smokeProjectPath -Recurse
-New-Item -ItemType Directory -Path (Split-Path -Parent $fakeGatewayOutputPath) -Force | Out-Null
+& $leanExecutable config set research-image $ResearchImage
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not restore the default LEAN research image."
+}
+
+$moduleDirectory = & (Join-Path $RepositoryPath "scripts\test_windows.ps1") -RepositoryPath $RepositoryPath -EngineImage $EngineImage
+if ($LASTEXITCODE -ne 0) {
+    throw "The Windows QMT build and package step failed."
+}
+$moduleDirectory = [string]($moduleDirectory | Select-Object -Last 1)
+$brokerageAssemblyPath = Join-Path $moduleDirectory "QuantConnect.Brokerages.Qmt.dll"
+if (-not (Test-Path -LiteralPath $brokerageAssemblyPath)) {
+    throw "The packaged QMT Brokerage assembly is missing: $brokerageAssemblyPath"
+}
+Write-DeploymentLog "stage=brokerage-module status=ok image=$EngineImage path=$brokerageAssemblyPath"
+
+$configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
+if ([string]$configuration."qmt-gateway-host" -ne "host.docker.internal") {
+    throw "qmt-gateway-host must be host.docker.internal."
+}
+if ([int]$configuration."qmt-gateway-port" -ne $GatewayPort) {
+    throw "qmt-gateway-port must be $GatewayPort."
+}
+if ([string]$configuration."qmt-trading-enabled" -ne "false") {
+    throw "qmt-trading-enabled must remain false for the live smoke."
+}
+$historyProviders = @($configuration.environments."live-qmt"."history-provider")
+if ($historyProviders -notcontains "BrokerageHistoryProvider") {
+    throw "live-qmt must use BrokerageHistoryProvider."
+}
+
+$gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
+if (-not $gatewayListener) {
+    throw "The real QMT Gateway is not listening on Windows port $GatewayPort. Run the Gateway strategy manually in QMT first."
+}
+Write-DeploymentLog "stage=gateway status=ok port=$GatewayPort local_address=$($gatewayListener[0].LocalAddress)"
+
 if (Test-Path -LiteralPath $liveOutputPath) {
     Remove-Item -LiteralPath $liveOutputPath -Recurse -Force
 }
 
-$fakeGatewayArguments = @(
-    (Join-Path $RepositoryPath "scripts\fake_qmt_gateway.py"),
-    "--host", "0.0.0.0",
-    "--port", [string]$FakeGatewayPort,
-    "--account-id", $fakeAccountId
+$brokerageVolume = @{}
+$brokerageVolume[$brokerageAssemblyPath] = @{
+    "bind" = "/Lean/Launcher/bin/Debug/QuantConnect.Brokerages.Qmt.dll"
+    "mode" = "ro"
+}
+$extraDockerConfiguration = @{
+    "volumes" = $brokerageVolume
+} | ConvertTo-Json -Depth 5 -Compress
+
+$leanArguments = @(
+    "live", "deploy", $liveProjectPath,
+    "--lean-config", $configurationPath,
+    "--environment", "live-qmt",
+    "--no-update",
+    "--extra-docker-config", $extraDockerConfiguration,
+    "--output", $liveOutputPath
 )
-Write-DeploymentLog "stage=fake-gateway status=start port=$FakeGatewayPort trading_enabled=false"
-$fakeGatewayProcess = Start-Process -FilePath $pythonExecutable -ArgumentList $fakeGatewayArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $fakeGatewayStandardOutputPath -RedirectStandardError $fakeGatewayOutputPath
-try {
-    $gatewayDeadline = (Get-Date).AddSeconds(10)
-    do {
-        Start-Sleep -Milliseconds 100
-        $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $FakeGatewayPort -ErrorAction SilentlyContinue
-    } while (-not $gatewayListener -and (Get-Date) -lt $gatewayDeadline)
-    if (-not $gatewayListener) {
-        throw "The fake QMT Gateway did not listen on port $FakeGatewayPort."
-    }
-    Write-DeploymentLog "stage=fake-gateway status=ok port=$FakeGatewayPort"
-
-    $leanArguments = @(
-        "live", "deploy", $smokeProjectPath,
-        "--lean-config", $smokeConfigurationPath,
-        "--environment", "live-qmt",
-        "--image", $imageName,
-        "--no-update",
-        "--output", $liveOutputPath
-    )
-    Write-DeploymentLog "stage=lean-smoke status=start image=$imageName environment=live-qmt"
-    & $leanExecutable @leanArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "lean live deploy failed with exit code $LASTEXITCODE."
-    }
-
-    $gatewayLog = Get-Content -LiteralPath $fakeGatewayOutputPath -Raw
-    foreach ($expectedOperation in @("hello", "query_account", "query_positions", "query_orders", "subscribe")) {
-        if (-not $gatewayLog.Contains("operation=$expectedOperation")) {
-            throw "The fake Gateway did not receive $expectedOperation."
-        }
-    }
-    if ($gatewayLog.Contains("operation=place_order") -or $gatewayLog.Contains("operation=cancel_order")) {
-        throw "The deployment smoke attempted a trading operation."
-    }
-
-    $logFiles = @(Get-ChildItem -LiteralPath $liveOutputPath -Recurse -File -ErrorAction SilentlyContinue)
-    $smokePassed = $false
-    foreach ($logFile in $logFiles) {
-        if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "QMT deployment smoke received fake live data" -Quiet -ErrorAction SilentlyContinue) {
-            $smokePassed = $true
-            break
-        }
-    }
-    if (-not $smokePassed) {
-        throw "The LEAN smoke success marker was not found in $liveOutputPath."
-    }
-    Write-DeploymentLog "stage=lean-smoke status=ok image=$imageName trading_enabled=false"
+Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
+& $leanExecutable @leanArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "lean live deploy failed with exit code $LASTEXITCODE."
 }
-finally {
-    if ($fakeGatewayProcess -and -not $fakeGatewayProcess.HasExited) {
-        Stop-Process -Id $fakeGatewayProcess.Id -Force
-        $fakeGatewayProcess.WaitForExit()
+
+$logFiles = @(Get-ChildItem -LiteralPath $liveOutputPath -Recurse -File -ErrorAction SilentlyContinue)
+$historyPassed = $false
+$accountPassed = $false
+$minuteBarPassed = $false
+$completed = $false
+foreach ($logFile in $logFiles) {
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=initialize status=ok" -Quiet -ErrorAction SilentlyContinue) {
+        $historyPassed = $true
     }
-    Remove-Item -LiteralPath $smokeConfigurationPath -Force -ErrorAction SilentlyContinue
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=account status=ok" -Quiet -ErrorAction SilentlyContinue) {
+        $accountPassed = $true
+    }
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=minute-bar status=ok" -Quiet -ErrorAction SilentlyContinue) {
+        $minuteBarPassed = $true
+    }
+    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=complete status=ok trading=disabled" -Quiet -ErrorAction SilentlyContinue) {
+        $completed = $true
+    }
 }
+if (-not $historyPassed) {
+    throw "The real QMT daily/minute history success marker was not found in $liveOutputPath."
+}
+if (-not $accountPassed) {
+    throw "The real QMT account success marker was not found in $liveOutputPath."
+}
+if (-not $minuteBarPassed) {
+    throw "The real QMT minute TradeBar success marker was not found in $liveOutputPath."
+}
+if (-not $completed) {
+    throw "The QMT E2E completion marker was not found in $liveOutputPath."
+}
+Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok minute_bar=ok trading_enabled=false output=$liveOutputPath"

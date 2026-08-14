@@ -4,7 +4,7 @@
 部署的完成状态。QMT 是 Brokerage/交易执行端，目标市场是 China A-share
 （上海、深圳、北京交易所）；两者不是同一个概念。
 
-最后更新：2026-08-13
+最后更新：2026-08-14
 
 ## 目标架构
 
@@ -16,10 +16,10 @@ Windows x64 宿主机
 │       ├── China A-share 下单、撤单和行情订阅
 │       └── 行情、委托、成交、账户、持仓回调
 │
-└── Docker Desktop（Linux/amd64，尚未完成）
-    └── 自定义 LEAN Engine 镜像
+└── Docker Desktop（Linux/amd64）
+    └── quantconnect/lean:latest
         ├── LEAN 策略
-        └── QuantConnect.Brokerages.Qmt.dll
+        └── 只读挂载的 QuantConnect.Brokerages.Qmt.dll
             └── 通过 host.docker.internal 连接 QMT Gateway
 ```
 
@@ -41,7 +41,7 @@ LEAN PlaceOrder
 - [x] Brokerage、Mac LEAN 和 Windows LEAN 对齐到 .NET 10。
 - [x] Windows 安装并由测试脚本校验 .NET 10 SDK。
 - [x] Windows 权威工作区固定为
-  `C:\Users\nemo\lean-net10\Lean.Brokerages.QMT`。
+  `C:\Users\nemo\lean\Lean.Brokerages.QMT`。
 - [x] Mac/Windows 离线测试环境固定 Python `3.11.13`。
 - [x] QMT 策略/Gateway 代码保持定制 Python `3.6.8` 语法兼容。
 - [x] `make test` 只在 Windows 执行 Python、C# 编译和 NUnit 测试。
@@ -108,7 +108,7 @@ LEAN PlaceOrder
 
 1. 在 Mac 执行 `make sync-windows`。
 2. Windows 创建
-   `C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\qmt_python\qmt_local_config.py`，
+   `C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\qmt_local_config.py`，
    来源为同目录的 `qmt_local_config.example.py`。
 3. 填写 `ACCOUNT_ID`，保持 `TRADING_ENABLED = False`。
 4. 在大 QMT 策略编辑器中新建/打开策略，把 `qmt_gateway_entry.py` 全文复制进去。
@@ -132,34 +132,26 @@ LEAN PlaceOrder
 
 ## 下一阶段：LEAN 与 lean-cli 部署
 
-### D. 固定 LEAN 并构建自定义镜像
+### D. 默认 LEAN 镜像与本地 Brokerage
 
-- [x] 目标 LEAN commit 已记录，Mac/Windows 均为
-  `d72852f25e81cf4505a9059fc037c7c49cd21825`。
-- [x] 通过幂等 Windows 安装脚本给 Launcher 增加 QMT `ProjectReference`。
-- [x] 确认 Launcher 输出及 deps 清单包含 `QuantConnect.Brokerages.Qmt`。
-- [x] 固定 Composer 发现链：Launcher output 扫描、`InheritedExport` Factory。
-- [ ] 在 Windows Docker 构建并标记 `linux/amd64` 自定义 Engine 镜像。
-- [ ] 镜像 tag 同时记录 LEAN SHA、QMT SHA 和协议版本。
-
-推荐 tag：
-
-```text
-lean-cli/engine:qmt-YYYYMMDD-<lean-short-sha>-<qmt-short-sha>
-```
+- [x] Windows lean-cli 默认镜像恢复为 `quantconnect/lean:latest`。
+- [x] Windows 从默认镜像读取 `lean_version` 和 `target_framework`。
+- [x] Windows 编译、测试 QMT 后，将 DLL 发布到对应版本的本地模块目录。
+- [x] live deploy 通过只读 volume 将本地 QMT DLL 注入 Launcher output。
+- [ ] 用默认镜像完成真实 QMT 只读 E2E。
 
 ### E. lean-cli 集成
 
-- [x] 通过不会被 CDN 模块刷新覆盖的 local overlay 注册 QMT Brokerage。
+- [x] 在 lean-cli `qmt` 分支注册 QMT Brokerage。
 - [x] 配置 `live-mode-brokerage = QmtBrokerage`。
 - [x] 配置 `data-queue-handler = QmtBrokerage`。
 - [x] 增加 Gateway host、port、account ID、timeout 和 trading-enabled 配置。
 - [x] 在隔离的 Windows `lean-qmt.json` 增加 `live-qmt` environment。
-- [ ] 固定 lean-cli fork commit/version 并用 editable 或固定版本安装。
+- [x] 固定 lean-cli `qmt` 分支并用 editable 安装。
 - [ ] 验证 `lean live deploy` 生成的 `config.json` 和镜像参数。
 
 lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和其他敏感配置不得
-提交到 Git。NuGet 是稳定后的可选分发方式，不是 MVP 或自定义镜像的前置条件。
+提交到 Git。QMT 使用本地 DLL，不构建自定义 Engine 镜像，也不生成 NuGet 包。
 
 ### F. 模拟账户与生产前验收
 
@@ -178,7 +170,7 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 1. 用户手工登录大 QMT
 2. 用户手工运行 QMT Gateway 策略
 3. 验证 Gateway 账号、协议版本和 trading_enabled
-4. lean live deploy --environment live-qmt --image <qmt-image> --no-update
+4. 将对应 LEAN 版本的本地 QMT DLL 挂载后执行 lean live deploy
 5. 验证资金、持仓、未完成委托和 China 行情
 6. 进入策略运行
 ```
@@ -188,10 +180,10 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 ```bash
 make test          # 同步后在 Windows 运行全部 fake/离线测试
 make test-windows  # 同 make test 的 Windows 工作流入口
-make sync-windows  # 只同步工作树，不测试、不操作 QMT
-make install-windows # 安装/验证 Launcher、lean-cli 和 lean-qmt.json
-make image         # 在 Windows 构建自定义 QMT LEAN 镜像
-make test-deployment # fake Gateway 的 lean-cli→镜像→Brokerage smoke
+make package-windows # 同步、Windows 编译/测试并发布版本化本地 DLL
+make sync-windows  # 通过 Git 同步已提交分支，不测试、不操作 QMT
+make install-windows # 验证 lean-cli、恢复默认镜像并生成 lean-qmt.json
+make test-live     # 默认镜像 + 本地 QMT DLL 的真实只读 E2E
 ```
 
 仍计划增加：
@@ -205,9 +197,8 @@ make stop              # 停止 LEAN 部署，不操作 QMT 客户端
 
 ## 当前阻塞与最短下一步
 
-MVP 的 fake/离线闭环、Launcher 接入和 lean-cli QMT module 已完成。Windows Launcher
-已经以 .NET 10 构建成功且输出 QMT DLL。当前 Docker Desktop 首次启动停在许可条款页，
-需用户本人在 RDP 中接受后，才能完成镜像及容器 smoke；自动化不能代为接受条款。
+MVP 的 fake/离线闭环和 lean-cli QMT module 已完成。当前需要完成默认
+`quantconnect/lean:latest` 拉取，再执行本地 DLL 注入的真实只读 E2E。
 
 最短下一步：保持交易关闭，由用户在真实大 QMT 中手工运行 Gateway 入口；只做
 `hello → query_account → query_positions → query_orders → subscribe`，保存日志并确认
@@ -222,3 +213,4 @@ MVP 的 fake/离线闭环、Launcher 接入和 lean-cli QMT module 已完成。W
 | 2026-08-13 | 完成协议 v1、Python Gateway、C# 客户端和 Brokerage MVP | Python 14/14；NUnit 51/51 |
 | 2026-08-13 | 固定交易双开关和 fake-only 自动测试安全边界 | trading-disabled Python/C# 测试通过 |
 | 2026-08-13 | 完成 Windows Launcher/lean-cli 幂等接入和隔离配置 | QMT DLL 进入 Launcher output；CLI module load 通过 |
+| 2026-08-14 | 改为默认 Engine 镜像和版本化本地 QMT DLL | 等待真实只读 E2E |

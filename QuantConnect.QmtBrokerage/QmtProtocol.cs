@@ -25,6 +25,7 @@ namespace QuantConnect.Brokerages.Qmt
             public const string QueryAccount = "query_account";
             public const string QueryPositions = "query_positions";
             public const string QueryOrders = "query_orders";
+            public const string QueryHistory = "query_history";
             public const string PlaceOrder = "place_order";
             public const string CancelOrder = "cancel_order";
             public const string Subscribe = "subscribe";
@@ -271,6 +272,48 @@ namespace QuantConnect.Brokerages.Qmt
     {
         [JsonProperty("stock_code")]
         public string StockCode { get; set; } = string.Empty;
+    }
+
+    public sealed class QmtHistoryRequest
+    {
+        [JsonProperty("stock_code")]
+        public string StockCode { get; set; } = string.Empty;
+
+        [JsonProperty("period")]
+        public string Period { get; set; } = string.Empty;
+
+        [JsonProperty("start_time")]
+        public string StartTime { get; set; } = string.Empty;
+
+        [JsonProperty("end_time")]
+        public string EndTime { get; set; } = string.Empty;
+    }
+
+    public sealed class QmtQueryHistoryPayload
+    {
+        [JsonProperty("bars")]
+        public List<QmtHistoryBar> Bars { get; set; } = new List<QmtHistoryBar>();
+    }
+
+    public sealed class QmtHistoryBar
+    {
+        [JsonProperty("time")]
+        public string Time { get; set; } = string.Empty;
+
+        [JsonProperty("open")]
+        public decimal Open { get; set; }
+
+        [JsonProperty("high")]
+        public decimal High { get; set; }
+
+        [JsonProperty("low")]
+        public decimal Low { get; set; }
+
+        [JsonProperty("close")]
+        public decimal Close { get; set; }
+
+        [JsonProperty("volume")]
+        public decimal Volume { get; set; }
     }
 
     public sealed class QmtSubscribePayload

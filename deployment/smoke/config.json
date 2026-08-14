@@ -1,8 +1,0 @@
-{
-  "algorithm-language": "Python",
-  "parameters": {},
-  "description": "Fake-only QMT deployment smoke test",
-  "cloud-id": 0,
-  "organization-id": "",
-  "encrypted": false
-}

@@ -354,6 +354,12 @@ def _quote_row(stock_code, quote_data):
 
 def _normalize_quote(stock_code, quote_data):
     quote_row, inferred_time = _quote_row(stock_code, quote_data)
+    raw_cumulative_volume = _number(
+        _attribute(quote_row, ("pvolume", "raw_volume"), 0)
+    )
+    cumulative_volume = raw_cumulative_volume or _number(
+        _attribute(quote_row, ("volume",), 0)
+    )
     return {
         "stock_code": stock_code,
         "time": str(
@@ -367,7 +373,7 @@ def _normalize_quote(stock_code, quote_data):
         "last_price": _number(
             _attribute(quote_row, ("lastPrice", "last_price"), 0)
         ),
-        "volume": _number(_attribute(quote_row, ("volume",), 0)),
+        "volume": cumulative_volume,
         "amount": _number(_attribute(quote_row, ("amount",), 0)),
         "bid_price": _first_number(
             _attribute(quote_row, ("bidPrice", "bid_price"), 0)
@@ -381,6 +387,73 @@ def _normalize_quote(stock_code, quote_data):
         "ask_volume": _first_number(
             _attribute(quote_row, ("askVol", "ask_volume"), 0)
         ),
+    }
+
+
+def _history_records(stock_code, history_data):
+    if isinstance(history_data, dict):
+        stock_history = history_data.get(stock_code)
+        if stock_history is None:
+            stock_history = history_data.get(stock_code.upper())
+    else:
+        stock_history = history_data
+
+    if stock_history is None:
+        return []
+
+    iterrows_function = getattr(stock_history, "iterrows", None)
+    if callable(iterrows_function):
+        records = []
+        for history_index, history_row in iterrows_function():
+            to_dict_function = getattr(history_row, "to_dict", None)
+            if callable(to_dict_function):
+                history_row = to_dict_function()
+            if not isinstance(history_row, dict):
+                continue
+            history_row = dict(history_row)
+            if not history_row.get("time") and not history_row.get("stime"):
+                history_row["time"] = history_index
+            records.append(history_row)
+        return records
+
+    if isinstance(stock_history, (list, tuple)):
+        return list(stock_history)
+
+    if isinstance(stock_history, dict):
+        if any(
+            field_name in stock_history
+            for field_name in ("open", "high", "low", "close")
+        ):
+            return [stock_history]
+
+        records = []
+        for history_time, history_row in stock_history.items():
+            if not isinstance(history_row, dict):
+                continue
+            history_row = dict(history_row)
+            if not history_row.get("time") and not history_row.get("stime"):
+                history_row["time"] = history_time
+            records.append(history_row)
+        return records
+
+    return []
+
+
+def _normalize_history_bar(history_row):
+    if not isinstance(history_row, dict):
+        return None
+    close_price = _number(_attribute(history_row, ("close",), 0))
+    if close_price <= 0:
+        return None
+    return {
+        "time": str(
+            _attribute(history_row, ("time", "stime"), "") or ""
+        ),
+        "open": _number(_attribute(history_row, ("open",), close_price)),
+        "high": _number(_attribute(history_row, ("high",), close_price)),
+        "low": _number(_attribute(history_row, ("low",), close_price)),
+        "close": close_price,
+        "volume": _number(_attribute(history_row, ("volume",), 0)),
     }
 
 
@@ -413,6 +486,8 @@ class LeanQmtGateway(object):
         get_trade_detail_data_function=None,
         passorder_function=None,
         cancel_function=None,
+        down_history_data_function=None,
+        get_market_data_function=None,
         subscribe_quote_function=None,
         unsubscribe_quote_function=None,
         bind_host=DEFAULT_BIND_HOST,
@@ -425,6 +500,8 @@ class LeanQmtGateway(object):
         self.get_trade_detail_data_function = get_trade_detail_data_function
         self.passorder_function = passorder_function
         self.cancel_function = cancel_function
+        self.down_history_data_function = down_history_data_function
+        self.get_market_data_function = get_market_data_function
         self.subscribe_quote_function = subscribe_quote_function
         self.unsubscribe_quote_function = unsubscribe_quote_function
         self.bind_host = str(bind_host or DEFAULT_BIND_HOST)
@@ -867,6 +944,8 @@ class LeanQmtGateway(object):
                     for order_info in self._query_trade_detail("ORDER")
                 ]
             }
+        if operation == "query_history":
+            return self._query_history(payload)
         if operation == "place_order":
             return self._place_order(payload)
         if operation == "cancel_order":
@@ -879,6 +958,61 @@ class LeanQmtGateway(object):
             "UNSUPPORTED_OPERATION",
             "Unsupported operation: %s" % operation,
         )
+
+    def _query_history(self, payload):
+        stock_code = str(payload.get("stock_code") or "").strip().upper()
+        period = str(payload.get("period") or "").strip().lower()
+        start_time = str(payload.get("start_time") or "").strip()
+        end_time = str(payload.get("end_time") or "").strip()
+        self._validate_stock_code(stock_code)
+        if period not in ("1m", "1d"):
+            raise _RequestError(
+                "UNSUPPORTED_HISTORY_PERIOD",
+                "QMT history supports only 1m and 1d periods.",
+            )
+        if not callable(self.get_market_data_function):
+            raise _RequestError(
+                "QMT_API_UNAVAILABLE",
+                "ContextInfo.get_market_data_ex is unavailable.",
+            )
+
+        started_at = time.time()
+        if callable(self.down_history_data_function):
+            self.down_history_data_function(
+                stock_code,
+                period,
+                start_time,
+                end_time,
+            )
+        history_data = self.get_market_data_function(
+            fields=["time", "open", "high", "low", "close", "volume"],
+            stock_code=[stock_code],
+            period=period,
+            start_time=start_time,
+            end_time=end_time,
+            count=-1,
+            dividend_type="none",
+            fill_data=True,
+            subscribe=False,
+        )
+        bars = []
+        for history_row in _history_records(stock_code, history_data):
+            normalized_bar = _normalize_history_bar(history_row)
+            if normalized_bar is not None:
+                bars.append(normalized_bar)
+        bars.sort(key=lambda history_bar: history_bar["time"])
+        _log(
+            "history_query_ok",
+            bars=len(bars),
+            elapsed_ms=int((time.time() - started_at) * 1000),
+            end_time=end_time,
+            first_time=bars[0]["time"] if bars else "",
+            last_time=bars[-1]["time"] if bars else "",
+            period=period,
+            start_time=start_time,
+            stock_code=stock_code,
+        )
+        return {"bars": bars}
 
     def _query_trade_detail(self, detail_type):
         if not self.account_id:
@@ -1160,6 +1294,7 @@ def init(
     get_trade_detail_data_function=None,
     passorder_function=None,
     cancel_function=None,
+    down_history_data_function=None,
     injected_account_id="",
 ):
     global _gateway
@@ -1189,6 +1324,12 @@ def init(
         get_trade_detail_data_function=get_trade_detail_data_function,
         passorder_function=passorder_function,
         cancel_function=cancel_function,
+        down_history_data_function=down_history_data_function,
+        get_market_data_function=getattr(
+            context_info,
+            "get_market_data_ex",
+            None,
+        ),
         subscribe_quote_function=getattr(context_info, "subscribe_quote", None),
         unsubscribe_quote_function=getattr(
             context_info,

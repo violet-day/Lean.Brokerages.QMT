@@ -74,14 +74,11 @@ tests/
   test_qmt_gateway.py         Fake-QMT Python tests
   ...                         Compatibility and read-only probe tests
 scripts/
-  sync_worktree_to_windows.sh Worktree sync over SSH
+  sync_worktree_to_windows.sh Git branch sync over SSH
   test_windows.ps1            Authoritative Windows test runner
-deployment/
-  lean-cli/modules-local.json Durable local lean-cli QMT module
-  smoke/                       Fake-only live deployment project
 ```
 
-The complete custom-engine and lean-cli deployment procedure is documented in
+The default-engine and local Brokerage deployment procedure is documented in
 [`docs/windows-deployment.md`](docs/windows-deployment.md).
 
 ## Authoritative tests
@@ -92,16 +89,18 @@ Run from the repository root on the Mac:
 make test
 ```
 
-The command packages the current worktree, including uncommitted files, sends
-it to Windows, then runs Python tests, `dotnet build`, and NUnit tests on
-Windows. It does not connect to a real QMT process and it never submits an
-order. All Gateway/Brokerage network tests use a loopback fake server and fake
-QMT functions.
+The command requires a clean Git worktree, pushes the current branch, and
+fast-forwards the same branch on Windows. It then runs Python tests,
+`dotnet build`, NUnit tests, and copies the QMT assembly into the local module
+directory selected from the default LEAN image's `lean_version` and
+`target_framework` labels. It does not connect to a real QMT process and it
+never submits an order. All Gateway/Brokerage network tests use a loopback fake
+server and fake QMT functions.
 
 The authoritative Windows checkout is:
 
 ```text
-C:\Users\nemo\lean-net10\Lean.Brokerages.QMT
+C:\Users\nemo\lean\Lean.Brokerages.QMT
 ```
 
 The Windows runner requires .NET 10 from
@@ -122,19 +121,20 @@ Python: 14/14 passed
 NUnit: 51/51 passed
 ```
 
-To synchronize without testing:
+Commit the local branch before synchronization. To push it to `origin` and
+fast-forward the same branch on Windows without testing:
 
 ```bash
 make sync-windows
 ```
 
-To install the Windows LEAN/lean-cli integration, build the custom image, and
-run the fake-only deployment smoke test:
+To package the local Brokerage and run the real read-only deployment smoke
+test with the default `quantconnect/lean:latest` image:
 
 ```bash
 make install-windows
-make image
-make test-deployment
+make package-windows
+make test-live
 ```
 
 ## One-time QMT Gateway setup
@@ -146,7 +146,7 @@ repository scripts do not start, stop, restart, or operate the QMT client.
 2. On Windows, create the ignored local configuration:
 
    ```powershell
-   Set-Location C:\Users\nemo\lean-net10\Lean.Brokerages.QMT
+   Set-Location C:\Users\nemo\lean\Lean.Brokerages.QMT
    Copy-Item qmt_python\qmt_local_config.example.py qmt_python\qmt_local_config.py
    ```
 
@@ -166,7 +166,7 @@ repository scripts do not start, stop, restart, or operate the QMT client.
    ```
 
 The entry file loads
-`C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py`
+`C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py`
 from disk each time the strategy starts. After code synchronization, restart
 the existing strategy manually; the entry does not need to be copied again.
 This direct loader avoids `importlib`, which is absent from QMT's trimmed

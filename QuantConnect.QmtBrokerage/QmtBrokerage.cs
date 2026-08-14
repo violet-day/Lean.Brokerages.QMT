@@ -13,6 +13,7 @@ using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Packets;
 using QuantConnect.Securities;
+using HistoryRequest = QuantConnect.Data.HistoryRequest;
 
 namespace QuantConnect.Brokerages.Qmt
 {
@@ -28,6 +29,9 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly QmtSymbolMapper _symbolMapper;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
+        private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
+            new Dictionary<Symbol, CumulativeVolumeState>();
+        private readonly object _cumulativeVolumeLock = new object();
         private readonly ConcurrentDictionary<string, int> _leanOrderIdsByClientOrderId =
             new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, int> _leanOrderIdsByNativeOrderId =
@@ -123,6 +127,55 @@ namespace QuantConnect.Brokerages.Qmt
                 .ToList();
             Log.Trace($"QmtBrokerage.GetOpenOrders(): status=ok open_orders={orders.Count}");
             return orders;
+        }
+
+        public override IEnumerable<BaseData> GetHistory(HistoryRequest request)
+        {
+            EnsureConnected();
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            if (request.Symbol.SecurityType != SecurityType.Equity ||
+                !string.Equals(request.Symbol.ID.Market, QmtSymbolMapper.MarketName, StringComparison.OrdinalIgnoreCase) ||
+                request.TickType != TickType.Trade ||
+                request.DataNormalizationMode != DataNormalizationMode.Raw ||
+                (request.Resolution != Resolution.Minute && request.Resolution != Resolution.Daily))
+            {
+                Log.Trace(
+                    $"QmtBrokerage.GetHistory(): status=unsupported symbol={request.Symbol.Value} " +
+                    $"market={request.Symbol.ID.Market} resolution={request.Resolution} tick_type={request.TickType} " +
+                    $"normalization={request.DataNormalizationMode}");
+                return Enumerable.Empty<BaseData>();
+            }
+
+            var period = request.Resolution == Resolution.Daily ? "1d" : "1m";
+            var response = SendRequest(QmtProtocol.Operations.QueryHistory, new QmtHistoryRequest
+            {
+                StockCode = _symbolMapper.GetBrokerageSymbol(request.Symbol),
+                Period = period,
+                StartTime = request.StartTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
+                EndTime = request.EndTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
+            });
+            var bars = response.ToPayload<QmtQueryHistoryPayload>().Bars
+                .Select(bar => (BaseData)new TradeBar(
+                    ParseQmtTime(bar.Time),
+                    request.Symbol,
+                    bar.Open,
+                    bar.High,
+                    bar.Low,
+                    bar.Close,
+                    bar.Volume,
+                    request.Resolution == Resolution.Daily ? TimeSpan.FromDays(1) : TimeSpan.FromMinutes(1)))
+                .OrderBy(bar => bar.Time)
+                .ToList();
+            Log.Trace(
+                $"QmtBrokerage.GetHistory(): status=ok symbol={request.Symbol.Value} resolution={request.Resolution} " +
+                $"bars={bars.Count} start={request.StartTimeLocal:O} end={request.EndTimeLocal:O} " +
+                $"first={(bars.Count == 0 ? "" : bars[0].Time.ToString("O"))} " +
+                $"last={(bars.Count == 0 ? "" : bars[^1].Time.ToString("O"))}");
+            return bars;
         }
 
         public override bool PlaceOrder(Order order)
@@ -270,7 +323,7 @@ namespace QuantConnect.Brokerages.Qmt
                     return new SubscriptionState(result.SubscriptionId);
                 });
             Interlocked.Increment(ref subscriptionState.ReferenceCount);
-            return subscriptionState.CreateEnumerator(newDataAvailableHandler);
+            return subscriptionState.CreateEnumerator(dataConfig.TickType, newDataAvailableHandler);
         }
 
         public void Unsubscribe(SubscriptionDataConfig dataConfig)
@@ -396,7 +449,15 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             var localTime = ParseQmtTime(quote.Time);
-            var tick = new Tick(
+            var tradeQuantity = GetIncrementalTradeQuantity(symbol, localTime, quote.Volume);
+            var tradeTick = new Tick(
+                localTime,
+                symbol,
+                string.Empty,
+                string.Empty,
+                tradeQuantity,
+                quote.LastPrice);
+            var quoteTick = new Tick(
                 localTime,
                 symbol,
                 quote.BidVolume,
@@ -404,10 +465,13 @@ namespace QuantConnect.Brokerages.Qmt
                 quote.AskVolume,
                 quote.AskPrice)
             {
-                Value = quote.LastPrice,
-                Quantity = quote.Volume
+                Value = quote.LastPrice
             };
-            subscriptionState.Publish(tick);
+            subscriptionState.Publish(tradeTick);
+            subscriptionState.Publish(quoteTick);
+            Log.Trace(
+                $"QmtBrokerage.HandleQuote(): status=published symbol={symbol.Value} time={localTime:O} " +
+                $"last={quote.LastPrice} cumulative_volume={quote.Volume} trade_quantity={tradeQuantity}");
         }
 
         private void HandleOrder(QmtOrderEventPayload orderUpdate)
@@ -626,11 +690,58 @@ namespace QuantConnect.Brokerages.Qmt
 
         private static DateTime ParseQmtTime(string value)
         {
-            if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedTime))
+            var normalizedValue = (value ?? string.Empty).Trim();
+            var exactFormats = new[]
+            {
+                "yyyyMMddHHmmssfff",
+                "yyyyMMddHHmmss",
+                "yyyyMMdd"
+            };
+            if (DateTime.TryParseExact(
+                normalizedValue,
+                exactFormats,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var exactTime))
+            {
+                return DateTime.SpecifyKind(exactTime, DateTimeKind.Unspecified);
+            }
+            if (long.TryParse(normalizedValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixTime))
+            {
+                try
+                {
+                    var utcTime = normalizedValue.Length >= 13
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(unixTime).UtcDateTime
+                        : DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime;
+                    return utcTime.ConvertFromUtc(TimeZones.Shanghai);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                }
+            }
+            if (DateTime.TryParse(normalizedValue, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedTime))
             {
                 return DateTime.SpecifyKind(parsedTime, DateTimeKind.Unspecified);
             }
             return DateTime.UtcNow.ConvertFromUtc(TimeZones.Shanghai);
+        }
+
+        private decimal GetIncrementalTradeQuantity(Symbol symbol, DateTime localTime, decimal cumulativeVolume)
+        {
+            lock (_cumulativeVolumeLock)
+            {
+                if (!_cumulativeVolumeBySymbol.TryGetValue(symbol, out var state) ||
+                    state.TradingDate != localTime.Date ||
+                    cumulativeVolume < state.CumulativeVolume)
+                {
+                    _cumulativeVolumeBySymbol[symbol] = new CumulativeVolumeState(localTime.Date, cumulativeVolume);
+                    return 0m;
+                }
+
+                var incrementalVolume = cumulativeVolume - state.CumulativeVolume;
+                state.CumulativeVolume = cumulativeVolume;
+                return incrementalVolume;
+            }
         }
 
         private void HandleGatewayDisconnected(object? sender, QmtGatewayDisconnectedEventArgs eventArgs)
@@ -670,10 +781,11 @@ namespace QuantConnect.Brokerages.Qmt
                 SubscriptionId = subscriptionId;
             }
 
-            public IEnumerator<BaseData> CreateEnumerator(EventHandler newDataAvailableHandler)
+            public IEnumerator<BaseData> CreateEnumerator(TickType tickType, EventHandler newDataAvailableHandler)
             {
                 var enumeratorId = Interlocked.Increment(ref _nextEnumeratorId);
                 var enumerator = new MarketDataEnumerator(
+                    tickType,
                     newDataAvailableHandler,
                     () => _enumerators.TryRemove(enumeratorId, out _));
                 _enumerators[enumeratorId] = enumerator;
@@ -684,7 +796,10 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 foreach (var enumerator in _enumerators.Values)
                 {
-                    enumerator.Enqueue(data.Clone());
+                    if (data is Tick tick && tick.TickType == enumerator.TickType)
+                    {
+                        enumerator.Enqueue(data.Clone());
+                    }
                 }
             }
 
@@ -705,11 +820,17 @@ namespace QuantConnect.Brokerages.Qmt
             private readonly Action _removeEnumerator;
             private int _isDisposed;
 
+            public TickType TickType { get; }
+
             public BaseData Current { get; private set; } = null!;
             object IEnumerator.Current => Current;
 
-            public MarketDataEnumerator(EventHandler? newDataAvailableHandler, Action removeEnumerator)
+            public MarketDataEnumerator(
+                TickType tickType,
+                EventHandler? newDataAvailableHandler,
+                Action removeEnumerator)
             {
+                TickType = tickType;
                 _newDataAvailableHandler = newDataAvailableHandler;
                 _removeEnumerator = removeEnumerator;
             }
@@ -752,6 +873,18 @@ namespace QuantConnect.Brokerages.Qmt
                 _queue.CompleteAdding();
                 _removeEnumerator();
                 _queue.Dispose();
+            }
+        }
+
+        private sealed class CumulativeVolumeState
+        {
+            public DateTime TradingDate { get; }
+            public decimal CumulativeVolume { get; set; }
+
+            public CumulativeVolumeState(DateTime tradingDate, decimal cumulativeVolume)
+            {
+                TradingDate = tradingDate;
+                CumulativeVolume = cumulativeVolume;
             }
         }
     }

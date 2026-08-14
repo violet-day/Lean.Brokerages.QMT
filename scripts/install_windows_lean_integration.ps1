@@ -1,11 +1,12 @@
 param(
-    [string]$LeanRoot = "C:\Users\nemo\lean-net10\Lean",
-    [string]$RepositoryPath = "C:\Users\nemo\lean-net10\Lean.Brokerages.QMT",
+    [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$LeanCliPath = "C:\Users\nemo\lean\lean-cli",
     [string]$LeanProjectRoot = "C:\Users\nemo\lean_project",
     [string]$AccountId = "",
     [string]$GatewayHost = "host.docker.internal",
-    [int]$GatewayPort = 17890
+    [int]$GatewayPort = 17890,
+    [string]$EngineImage = "quantconnect/lean:latest",
+    [string]$ResearchImage = "quantconnect/research:latest"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,68 +34,8 @@ function Save-Utf8Text {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8Encoding)
 }
 
-function Add-QmtLauncherProjectReference {
-    $launcherProjectPath = Join-Path $LeanRoot "Launcher\QuantConnect.Lean.Launcher.csproj"
-    $referencePath = "..\..\Lean.Brokerages.QMT\QuantConnect.QmtBrokerage\QuantConnect.QmtBrokerage.csproj"
-    Write-DeploymentLog "stage=lean-integration status=start launcher=$launcherProjectPath"
-
-    [xml]$launcherProject = Get-Content -LiteralPath $launcherProjectPath -Raw
-    $existingReference = @($launcherProject.Project.ItemGroup.ProjectReference) |
-        Where-Object { $_.Include -eq $referencePath }
-    if ($existingReference.Count -eq 0) {
-        $referenceGroups = @($launcherProject.Project.ItemGroup) |
-            Where-Object { @($_.ProjectReference).Count -gt 0 }
-        if ($referenceGroups.Count -eq 0) {
-            throw "The Launcher project has no ProjectReference ItemGroup."
-        }
-
-        $projectReference = $launcherProject.CreateElement("ProjectReference")
-        $projectReference.SetAttribute("Include", $referencePath)
-        [void]$referenceGroups[0].AppendChild($projectReference)
-        $writerSettings = New-Object System.Xml.XmlWriterSettings
-        $writerSettings.Indent = $true
-        $writerSettings.IndentChars = "  "
-        $writerSettings.NewLineChars = "`r`n"
-        $writerSettings.Encoding = $utf8Encoding
-        $writer = [System.Xml.XmlWriter]::Create($launcherProjectPath, $writerSettings)
-        try {
-            $launcherProject.Save($writer)
-        }
-        finally {
-            $writer.Dispose()
-        }
-        Write-DeploymentLog "stage=lean-integration status=updated project_reference=$referencePath"
-    }
-    else {
-        Write-DeploymentLog "stage=lean-integration status=unchanged project_reference=$referencePath"
-    }
-}
-
-function Install-QmtLeanCliOverlay {
-    $sourceModulePath = Join-Path $RepositoryPath "deployment\lean-cli\modules-local.json"
-    $destinationModulePath = Join-Path $LeanCliPath "lean\modules-local.json"
-    $modelsInitializerPath = Join-Path $LeanCliPath "lean\models\__init__.py"
-    $overlayMarker = "qmt-local-modules-overlay"
-    Write-DeploymentLog "stage=lean-cli-overlay status=start path=$LeanCliPath"
-
-    Copy-Item -LiteralPath $sourceModulePath -Destination $destinationModulePath -Force
-    $modelsInitializer = Get-Content -LiteralPath $modelsInitializerPath -Raw
-    if (-not $modelsInitializer.Contains($overlayMarker)) {
-        $overlayCode = @'
-
-# qmt-local-modules-overlay: merge optional locally maintained modules after the CDN manifest.
-local_modules_path = directory.parent / "modules-local.json"
-if local_modules_path.is_file():
-    with open(local_modules_path, encoding="utf-8") as local_modules_file:
-        json_modules.extend(load(local_modules_file).get("modules", []))
-'@
-        Save-Utf8Text -Path $modelsInitializerPath -Content ($modelsInitializer.TrimEnd() + $overlayCode + "`n")
-        Write-DeploymentLog "stage=lean-cli-overlay status=updated initializer=$modelsInitializerPath"
-    }
-    else {
-        Write-DeploymentLog "stage=lean-cli-overlay status=unchanged initializer=$modelsInitializerPath"
-    }
-
+function Confirm-QmtLeanCliIntegration {
+    Write-DeploymentLog "stage=lean-cli-qmt-branch status=start path=$LeanCliPath"
     $leanPythonExecutable = "C:\Users\nemo\anaconda3\python.exe"
     if (-not (Test-Path -LiteralPath $leanPythonExecutable)) {
         throw "The lean-cli Python executable is missing: $leanPythonExecutable"
@@ -109,13 +50,27 @@ print("QMT brokerage and data queue modules loaded")
     try {
         $moduleCheck | & $leanPythonExecutable -
         if ($LASTEXITCODE -ne 0) {
-            throw "The QMT lean-cli module overlay did not load."
+            throw "The QMT lean-cli branch did not load its local module."
         }
     }
     finally {
         Pop-Location
     }
-    Write-DeploymentLog "stage=lean-cli-overlay status=ok"
+    Write-DeploymentLog "stage=lean-cli-qmt-branch status=ok"
+}
+
+function Set-DefaultLeanImages {
+    $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"
+    Write-DeploymentLog "stage=default-images status=start engine=$EngineImage research=$ResearchImage"
+    & $leanExecutable config set engine-image $EngineImage
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not set the default LEAN engine image."
+    }
+    & $leanExecutable config set research-image $ResearchImage
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not set the default LEAN research image."
+    }
+    Write-DeploymentLog "stage=default-images status=ok engine=$EngineImage research=$ResearchImage"
 }
 
 function New-QmtLeanConfiguration {
@@ -143,7 +98,7 @@ function New-QmtLeanConfiguration {
     $configuration | Add-Member -NotePropertyName "qmt-gateway-host" -NotePropertyValue $GatewayHost -Force
     $configuration | Add-Member -NotePropertyName "qmt-gateway-port" -NotePropertyValue ([string]$GatewayPort) -Force
     $configuration | Add-Member -NotePropertyName "qmt-account-id" -NotePropertyValue $AccountId -Force
-    $configuration | Add-Member -NotePropertyName "qmt-request-timeout" -NotePropertyValue "10" -Force
+    $configuration | Add-Member -NotePropertyName "qmt-request-timeout" -NotePropertyValue "60" -Force
     $configuration | Add-Member -NotePropertyName "qmt-trading-enabled" -NotePropertyValue "false" -Force
 
     if (-not $configuration.PSObject.Properties["environments"]) {
@@ -158,7 +113,7 @@ function New-QmtLeanConfiguration {
         "data-queue-handler" = @("QmtBrokerage")
         "real-time-handler" = "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler"
         "transaction-handler" = "QuantConnect.Lean.Engine.TransactionHandlers.BrokerageTransactionHandler"
-        "history-provider" = @("SubscriptionDataReaderHistoryProvider")
+        "history-provider" = @("BrokerageHistoryProvider")
     }
     $configuration.environments | Add-Member -NotePropertyName "live-qmt" -NotePropertyValue ([pscustomobject]$liveQmtEnvironment) -Force
 
@@ -170,7 +125,7 @@ function New-QmtLeanConfiguration {
     Write-DeploymentLog "stage=lean-config status=ok path=$qmtConfigurationPath trading_enabled=false"
 }
 
-Add-QmtLauncherProjectReference
-Install-QmtLeanCliOverlay
+Confirm-QmtLeanCliIntegration
+Set-DefaultLeanImages
 New-QmtLeanConfiguration
 Write-DeploymentLog "stage=install status=ok"

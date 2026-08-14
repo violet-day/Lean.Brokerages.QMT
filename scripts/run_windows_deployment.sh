@@ -4,11 +4,10 @@ set -euo pipefail
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
-image_tag="${QMT_IMAGE_TAG:-qmt-20260813-d72852f25-worktree}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
 
-if [[ "$action" != "install" && "$action" != "image" && "$action" != "test" ]]; then
-    echo "usage: $0 {install|image|test}" >&2
+if [[ "$action" != "install" && "$action" != "test" ]]; then
+    echo "usage: $0 {install|test}" >&2
     exit 2
 fi
 
@@ -18,16 +17,12 @@ echo "[qmt-deploy] host=mac stage=sync status=ok action=$action"
 
 case "$action" in
     install)
-        powershell_script_path='C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\scripts\install_windows_lean_integration.ps1'
+        powershell_script_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\install_windows_lean_integration.ps1'
         powershell_arguments="-AccountId '$account_id'"
         ;;
-    image)
-        powershell_script_path='C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\scripts\build_windows_lean_image.ps1'
-        powershell_arguments="-ImageTag '$image_tag'"
-        ;;
     test)
-        powershell_script_path='C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\scripts\test_windows_deployment.ps1'
-        powershell_arguments="-ImageTag '$image_tag'"
+        powershell_script_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_deployment.ps1'
+        powershell_arguments=""
         ;;
 esac
 
