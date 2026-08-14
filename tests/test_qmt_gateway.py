@@ -60,6 +60,20 @@ class FakeContextInfo:
             ]
         }
 
+    def get_market_data_ex_ori(self, **kwargs):
+        return {
+            kwargs["stock_code"][0]: [
+                [
+                    "20260813093100",
+                    10.0,
+                    10.2,
+                    9.9,
+                    10.1,
+                    1200,
+                ]
+            ]
+        }
+
 
 def request_message(request_id, operation, payload=None):
     return {
@@ -132,7 +146,7 @@ class QmtGatewayTests(unittest.TestCase):
             account_id="test-account",
             get_trade_detail_data_function=self.query_trade_detail,
             down_history_data_function=down_history_data,
-            get_market_data_function=self.context_info.get_market_data_ex,
+            get_market_data_function=self.context_info.get_market_data_ex_ori,
             subscribe_quote_function=self.context_info.subscribe_quote,
             unsubscribe_quote_function=self.context_info.unsubscribe_quote,
             bind_port=0,
@@ -506,6 +520,10 @@ class QmtGatewayTests(unittest.TestCase):
                 ],
             )
             self.assertFalse(initialized_gateway.trading_enabled)
+            self.assertEqual(
+                initialized_gateway.get_market_data_function.__name__,
+                "get_market_data_ex_ori",
+            )
 
             initialized_gateway.enqueue_received_message(
                 None,

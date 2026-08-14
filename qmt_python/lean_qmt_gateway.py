@@ -411,7 +411,7 @@ def _normalize_quote(stock_code, quote_data):
     }
 
 
-def _history_records(stock_code, history_data):
+def _history_records(stock_code, history_data, field_names):
     if isinstance(history_data, dict):
         stock_history = history_data.get(stock_code)
         if stock_history is None:
@@ -438,7 +438,14 @@ def _history_records(stock_code, history_data):
         return records
 
     if isinstance(stock_history, (list, tuple)):
-        return list(stock_history)
+        records = []
+        raw_field_names = ["stime"] + list(field_names)
+        for history_row in stock_history:
+            if isinstance(history_row, dict):
+                records.append(history_row)
+            elif isinstance(history_row, (list, tuple)):
+                records.append(dict(zip(raw_field_names, history_row)))
+        return records
 
     if isinstance(stock_history, dict):
         if any(
@@ -1005,8 +1012,9 @@ class LeanQmtGateway(object):
                 start_time,
                 end_time,
             )
+        history_field_names = ["open", "high", "low", "close", "volume"]
         history_data = self.get_market_data_function(
-            fields=["time", "open", "high", "low", "close", "volume"],
+            fields=history_field_names,
             stock_code=[stock_code],
             period=period,
             start_time=start_time,
@@ -1017,7 +1025,11 @@ class LeanQmtGateway(object):
             subscribe=False,
         )
         bars = []
-        for history_row in _history_records(stock_code, history_data):
+        for history_row in _history_records(
+            stock_code,
+            history_data,
+            history_field_names,
+        ):
             normalized_bar = _normalize_history_bar(history_row)
             if normalized_bar is not None:
                 bars.append(normalized_bar)
@@ -1349,6 +1361,25 @@ def init(
         raise
     _log("set_account_ok", account_id=account_id)
 
+    get_market_data_function = getattr(
+        context_info,
+        "get_market_data_ex_ori",
+        None,
+    )
+    history_api_name = "get_market_data_ex_ori"
+    if not callable(get_market_data_function):
+        get_market_data_function = getattr(
+            context_info,
+            "get_market_data_ex",
+            None,
+        )
+        history_api_name = "get_market_data_ex"
+    _log(
+        "history_api_selected",
+        api=history_api_name,
+        available=callable(get_market_data_function),
+    )
+
     _gateway = LeanQmtGateway(
         context_info=context_info,
         account_id=account_id,
@@ -1356,11 +1387,7 @@ def init(
         passorder_function=passorder_function,
         cancel_function=cancel_function,
         down_history_data_function=down_history_data_function,
-        get_market_data_function=getattr(
-            context_info,
-            "get_market_data_ex",
-            None,
-        ),
+        get_market_data_function=get_market_data_function,
         subscribe_quote_function=getattr(context_info, "subscribe_quote", None),
         unsubscribe_quote_function=getattr(
             context_info,
