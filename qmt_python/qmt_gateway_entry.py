@@ -6,7 +6,7 @@ import sys
 
 
 REPOSITORY_PYTHON_DIRECTORY = (
-    r"C:\Users\nemo\lean-net10\Lean.Brokerages.QMT\qmt_python"
+    r"C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python"
 )
 
 
