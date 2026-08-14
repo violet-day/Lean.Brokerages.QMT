@@ -135,9 +135,10 @@ try {
         throw ".NET build-server shutdown failed with exit code $LASTEXITCODE."
     }
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-server status=ok"
+    $testProjectPath = ".\QuantConnect.QmtBrokerage.Tests\QuantConnect.QmtBrokerage.Tests.csproj"
     $dotnetBuildStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion target_framework=$targetFramework command=`"$dotnetExecutable build QuantConnect.QmtBrokerage.sln --configuration Release`""
-    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--nologo", "--verbosity", "minimal", "--disable-build-servers", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:TargetFramework=$targetFramework")
+    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion target_framework=$targetFramework project=$testProjectPath"
+    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", $testProjectPath, "--configuration", "Release", "--nologo", "--verbosity", "minimal", "--disable-build-servers", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:TargetFramework=$targetFramework")
     if ($commandExitCode -ne 0) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=failed exit_code=$commandExitCode"
         throw ".NET build failed with exit code $commandExitCode."
@@ -146,8 +147,8 @@ try {
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=ok duration_ms=$dotnetBuildDurationMilliseconds"
 
     $dotnetTestsStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start command=`"dotnet test QuantConnect.QmtBrokerage.sln --no-build`""
-    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", ".\QuantConnect.QmtBrokerage.sln", "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
+    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
+    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
     if ($commandExitCode -ne 0) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=failed exit_code=$commandExitCode"
         throw ".NET tests failed with exit code $commandExitCode."
