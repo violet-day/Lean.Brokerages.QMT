@@ -1042,12 +1042,20 @@ class LeanQmtGateway(object):
             fill_data=True,
             subscribe=False,
         )
-        bars = []
-        for history_row in _history_records(
+        history_records = _history_records(
             stock_code,
             history_data,
             history_field_names,
-        ):
+        )
+        _log(
+            "history_data_received",
+            raw_type=type(history_data).__name__,
+            records=len(history_records),
+            sample=repr(history_records[0])[:500] if history_records else "",
+            stock_code=stock_code,
+        )
+        bars = []
+        for history_row in history_records:
             normalized_bar = _normalize_history_bar(history_row)
             if normalized_bar is not None:
                 bars.append(normalized_bar)
