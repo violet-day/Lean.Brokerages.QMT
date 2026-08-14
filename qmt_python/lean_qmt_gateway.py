@@ -1006,12 +1006,30 @@ class LeanQmtGateway(object):
 
         started_at = time.time()
         if callable(self.down_history_data_function):
-            self.down_history_data_function(
+            history_download_started_at = time.time()
+            _log(
+                "history_download_start",
+                end_time=end_time,
+                period=period,
+                start_time=start_time,
+                stock_code=stock_code,
+            )
+            history_download_result = self.down_history_data_function(
                 stock_code,
                 period,
                 start_time,
                 end_time,
             )
+            _log(
+                "history_download_complete",
+                elapsed_ms=int(
+                    (time.time() - history_download_started_at) * 1000
+                ),
+                result=repr(history_download_result),
+                stock_code=stock_code,
+            )
+        else:
+            _log("history_download_unavailable", stock_code=stock_code)
         history_field_names = ["open", "high", "low", "close", "volume"]
         history_data = self.get_market_data_function(
             fields=history_field_names,
@@ -1378,6 +1396,7 @@ def init(
         "history_api_selected",
         api=history_api_name,
         available=callable(get_market_data_function),
+        download_available=callable(down_history_data_function),
     )
 
     _gateway = LeanQmtGateway(
