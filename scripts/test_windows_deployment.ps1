@@ -110,8 +110,15 @@ $leanArguments = @(
     "--output", $liveOutputPath
 )
 Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
-$leanOutput = & $leanExecutable @leanArguments 2>&1
-$leanExitCode = $LASTEXITCODE
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    $leanOutput = & $leanExecutable @leanArguments 2>&1
+    $leanExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
 if ($leanOutput) {
     $leanOutputText = ($leanOutput | Out-String)
     [System.IO.File]::AppendAllText($liveTestLogPath, $leanOutputText, $utf8Encoding)
