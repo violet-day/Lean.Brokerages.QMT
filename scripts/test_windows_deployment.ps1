@@ -100,13 +100,14 @@ $brokerageVolume[$brokerageAssemblyPath] = @{
 $extraDockerConfiguration = @{
     "volumes" = $brokerageVolume
 } | ConvertTo-Json -Depth 5 -Compress
+$escapedExtraDockerConfiguration = $extraDockerConfiguration.Replace('"', '\"')
 
 $leanArguments = @(
     "live", "deploy", $liveProjectPath,
     "--lean-config", $configurationPath,
     "--environment", "live-qmt",
     "--no-update",
-    "--extra-docker-config", $extraDockerConfiguration,
+    "--extra-docker-config", $escapedExtraDockerConfiguration,
     "--output", $liveOutputPath
 )
 Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
