@@ -23,8 +23,11 @@ function Write-LiveLogServerLog {
 }
 
 function Test-ContainerExists {
-    & $dockerExecutable inspect $ContainerName *> $null
-    return $LASTEXITCODE -eq 0
+    $matchingContainerNames = @(& $dockerExecutable ps --all --filter "name=^/$ContainerName$" --format "{{.Names}}")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not query Docker containers."
+    }
+    return $matchingContainerNames -contains $ContainerName
 }
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
@@ -73,8 +76,11 @@ if ($portListener) {
     throw "Windows port $Port is already in use by process $($portListener[0].OwningProcess)."
 }
 
-& $dockerExecutable image inspect $NginxImage *> $null
+$matchingImageIds = @(& $dockerExecutable image ls --quiet $NginxImage)
 if ($LASTEXITCODE -ne 0) {
+    throw "Could not query Docker images."
+}
+if ($matchingImageIds.Count -eq 0) {
     Write-LiveLogServerLog "stage=image status=pull image=$NginxImage"
     & $dockerExecutable pull $NginxImage
     if ($LASTEXITCODE -ne 0) {
