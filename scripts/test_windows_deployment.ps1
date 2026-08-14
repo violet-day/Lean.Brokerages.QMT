@@ -106,67 +106,121 @@ $leanArguments = @(
     "live", "deploy", $liveProjectPath,
     "--lean-config", $configurationPath,
     "--environment", "live-qmt",
+    "--detach",
     "--no-update",
     "--extra-docker-config", $escapedExtraDockerConfiguration,
     "--output", $liveOutputPath
 )
 Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
-$previousErrorActionPreference = $ErrorActionPreference
-try {
-    $ErrorActionPreference = "Continue"
-    $leanOutput = & $leanExecutable @leanArguments 2>&1
-    $leanExitCode = $LASTEXITCODE
-}
-finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-}
-if ($leanOutput) {
-    $leanOutputText = ($leanOutput | Out-String)
-    [System.IO.File]::AppendAllText($liveTestLogPath, $leanOutputText, $utf8Encoding)
-    [Console]::Error.Write($leanOutputText)
-}
-if ($leanExitCode -ne 0) {
-    throw "lean live deploy failed with exit code $leanExitCode."
+$existingLeanContainers = @(& $dockerExecutable ps --filter "ancestor=$EngineImage" --format "{{.ID}}")
+if ($existingLeanContainers.Count -ne 0) {
+    throw "A LEAN container is already running: $($existingLeanContainers -join ', ')."
 }
 
-$logFiles = @(Get-ChildItem -LiteralPath $liveOutputPath -Recurse -File -ErrorAction SilentlyContinue)
+$containerId = $null
+$containerLogText = ""
 $historyPassed = $false
 $accountPassed = $false
 $minuteBarPassed = $false
 $subscriptionPassed = $false
 $marketClosedPassed = $false
 $completed = $false
-foreach ($logFile in $logFiles) {
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=initialize status=ok" -Quiet -ErrorAction SilentlyContinue) {
-        $historyPassed = $true
+$prerequisitesReachedAt = $null
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    $leanOutput = & $leanExecutable @leanArguments 2>&1
+    $leanExitCode = $LASTEXITCODE
+    if ($leanOutput) {
+        $leanOutputText = ($leanOutput | Out-String)
+        [System.IO.File]::AppendAllText($liveTestLogPath, $leanOutputText, $utf8Encoding)
+        [Console]::Error.Write($leanOutputText)
     }
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=account status=ok" -Quiet -ErrorAction SilentlyContinue) {
-        $accountPassed = $true
+    if ($leanExitCode -ne 0) {
+        throw "lean live deploy failed with exit code $leanExitCode."
     }
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=minute-bar status=ok" -Quiet -ErrorAction SilentlyContinue) {
-        $minuteBarPassed = $true
+
+    $containerDiscoveryDeadline = (Get-Date).AddSeconds(30)
+    while (-not $containerId -and (Get-Date) -lt $containerDiscoveryDeadline) {
+        $containerId = (& $dockerExecutable ps --filter "ancestor=$EngineImage" --format "{{.ID}}" | Select-Object -First 1)
+        if (-not $containerId) {
+            Start-Sleep -Milliseconds 500
+        }
     }
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "QmtBrokerage.Subscribe(): status=ok" -Quiet -ErrorAction SilentlyContinue) {
-        $subscriptionPassed = $true
+    if (-not $containerId) {
+        throw "The detached LEAN live container did not start."
     }
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred" -Quiet -ErrorAction SilentlyContinue) {
-        $marketClosedPassed = $true
+
+    $validationDeadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $validationDeadline) {
+        $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
+        $dailyHistoryPassed = $containerLogText.Contains("QmtBrokerage.GetHistory(): status=ok symbol=600000 resolution=Daily bars=5")
+        $minuteHistoryPassed = $containerLogText.Contains("QmtBrokerage.GetHistory(): status=ok symbol=600000 resolution=Minute")
+        $historyPassed = $dailyHistoryPassed -and $minuteHistoryPassed
+        $accountPassed = $containerLogText.Contains("QmtBrokerage.GetCashBalance(): status=ok accounts=1")
+        $subscriptionPassed = $containerLogText.Contains("QmtBrokerage.Subscribe(): status=ok symbol=600000")
+        $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
+        $marketClosedPassed = $containerLogText.Contains("[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred")
+        $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
+
+        if ($historyPassed -and $accountPassed -and $subscriptionPassed) {
+            if ($minuteBarPassed -and $completed) {
+                break
+            }
+            if ($marketClosedPassed) {
+                break
+            }
+            if ($null -eq $prerequisitesReachedAt) {
+                $prerequisitesReachedAt = Get-Date
+            }
+            $quoteReceived = $containerLogText.Contains("QmtBrokerage.HandleQuote(): status=published symbol=600000")
+            if (-not $quoteReceived -and (Get-Date) -ge $prerequisitesReachedAt.AddSeconds(15)) {
+                break
+            }
+        }
+
+        $containerIsRunning = (& $dockerExecutable inspect --format "{{.State.Running}}" $containerId 2>$null) -eq "true"
+        if (-not $containerIsRunning) {
+            break
+        }
+        Start-Sleep -Seconds 1
     }
-    if (Select-String -LiteralPath $logFile.FullName -SimpleMatch "[qmt-e2e] stage=complete status=ok trading=disabled" -Quiet -ErrorAction SilentlyContinue) {
-        $completed = $true
+
+    $containerIsRunning = (& $dockerExecutable inspect --format "{{.State.Running}}" $containerId 2>$null) -eq "true"
+    if ($containerIsRunning) {
+        & $dockerExecutable stop --time 30 $containerId | Out-Null
     }
+
+    $finalContainerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
+    if ($finalContainerLogText) {
+        $containerLogText = $finalContainerLogText
+    }
+    $marketClosedPassed = $marketClosedPassed -or $containerLogText.Contains("[qmt-e2e] stage=market-closed status=ok subscription=required live_bar=deferred")
+    $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
+    $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
+    [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
+    [Console]::Error.Write($containerLogText)
+}
+finally {
+    if ($containerId) {
+        $containerIsRunning = (& $dockerExecutable inspect --format "{{.State.Running}}" $containerId 2>$null) -eq "true"
+        if ($containerIsRunning) {
+            & $dockerExecutable stop --time 30 $containerId | Out-Null
+        }
+    }
+    $ErrorActionPreference = $previousErrorActionPreference
 }
 if (-not $historyPassed) {
-    throw "The real QMT daily/minute history success marker was not found in $liveOutputPath."
+    throw "The real QMT daily/minute history success markers were not found."
 }
 if (-not $accountPassed) {
-    throw "The real QMT account success marker was not found in $liveOutputPath."
+    throw "The real QMT account query success marker was not found."
 }
-if (-not $minuteBarPassed -and (-not $marketClosedPassed -or -not $subscriptionPassed)) {
-    throw "Neither a real QMT minute TradeBar nor a successful after-hours subscription was found in $liveOutputPath."
+if (-not $subscriptionPassed) {
+    throw "The real QMT subscription success marker was not found."
 }
-if (-not $completed) {
-    throw "The QMT E2E completion marker was not found in $liveOutputPath."
+if (-not ($minuteBarPassed -and $completed) -and -not $marketClosedPassed) {
+    throw "Neither a real QMT minute TradeBar nor the closed-market marker was found."
 }
 $minuteBarStatus = if ($minuteBarPassed) { "ok" } else { "deferred_market_closed" }
 Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok minute_bar=$minuteBarStatus trading_enabled=false output=$liveOutputPath"
