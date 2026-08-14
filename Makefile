@@ -1,4 +1,4 @@
-.PHONY: test test-windows package-windows sync-windows sync-smoke install-windows test-live
+.PHONY: test test-windows package-windows sync-windows sync-smoke install-windows test-live serve-live-logs stop-live-logs status-live-logs
 
 test:
 	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build -> Windows NUnit tests"'
@@ -21,3 +21,12 @@ install-windows:
 
 test-live: sync-smoke
 	@./scripts/run_windows_deployment.sh test
+
+serve-live-logs:
+	@./scripts/run_windows_deployment.sh logs-start
+
+stop-live-logs:
+	@./scripts/run_windows_deployment.sh logs-stop
+
+status-live-logs:
+	@./scripts/run_windows_deployment.sh logs-status

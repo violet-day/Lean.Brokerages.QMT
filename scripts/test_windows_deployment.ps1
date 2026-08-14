@@ -88,9 +88,8 @@ if (-not $gatewayListener) {
 }
 Write-DeploymentLog "stage=gateway status=ok port=$GatewayPort local_address=$($gatewayListener[0].LocalAddress)"
 
-if (Test-Path -LiteralPath $liveOutputPath) {
-    Remove-Item -LiteralPath $liveOutputPath -Recurse -Force
-}
+New-Item -ItemType Directory -Path $liveOutputPath -Force | Out-Null
+Get-ChildItem -LiteralPath $liveOutputPath -Force | Remove-Item -Recurse -Force
 
 $brokerageVolume = @{}
 $brokerageVolume[$brokerageAssemblyPath] = @{
