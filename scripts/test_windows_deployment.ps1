@@ -3,6 +3,7 @@ param(
     [string]$LeanProjectRoot = "C:\Users\nemo\lean_project",
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ResearchImage = "quantconnect/research:latest",
+    [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
     [int]$GatewayPort = 17890
 )
 
@@ -52,16 +53,18 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not restore the default LEAN research image."
 }
 
-$moduleDirectory = & (Join-Path $RepositoryPath "scripts\test_windows.ps1") -RepositoryPath $RepositoryPath -EngineImage $EngineImage
-if ($LASTEXITCODE -ne 0) {
-    throw "The Windows QMT build and package step failed."
+$engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
+if (-not $engineImageMetadata) {
+    throw "The default LEAN engine image is missing: $EngineImage"
 }
-$moduleDirectory = [string]($moduleDirectory | Select-Object -Last 1)
+$targetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
+$leanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
+$moduleDirectory = Join-Path (Join-Path $ModuleRoot $leanVersion) $targetFramework
 $brokerageAssemblyPath = Join-Path $moduleDirectory "QuantConnect.Brokerages.Qmt.dll"
 if (-not (Test-Path -LiteralPath $brokerageAssemblyPath)) {
-    throw "The packaged QMT Brokerage assembly is missing: $brokerageAssemblyPath"
+    throw "The packaged QMT Brokerage assembly is missing: $brokerageAssemblyPath. Run make package-windows first."
 }
-Write-DeploymentLog "stage=brokerage-module status=ok image=$EngineImage path=$brokerageAssemblyPath"
+Write-DeploymentLog "stage=brokerage-module status=ok image=$EngineImage lean_version=$leanVersion target_framework=$targetFramework path=$brokerageAssemblyPath"
 
 $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
 if ([string]$configuration."qmt-gateway-host" -ne "host.docker.internal") {
