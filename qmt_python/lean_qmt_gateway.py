@@ -452,6 +452,29 @@ def _history_records(stock_code, history_data, field_names):
             field_name in stock_history
             for field_name in ("open", "high", "low", "close")
         ):
+            column_field_names = [
+                field_name
+                for field_name, field_values in stock_history.items()
+                if isinstance(field_values, (list, tuple))
+            ]
+            if column_field_names:
+                record_count = max(
+                    len(stock_history[field_name])
+                    for field_name in column_field_names
+                )
+                records = []
+                for record_index in range(record_count):
+                    history_row = {}
+                    for field_name, field_values in stock_history.items():
+                        if isinstance(field_values, (list, tuple)):
+                            if record_index < len(field_values):
+                                history_row[field_name] = field_values[
+                                    record_index
+                                ]
+                        else:
+                            history_row[field_name] = field_values
+                    records.append(history_row)
+                return records
             return [stock_history]
 
         records = []
@@ -475,7 +498,7 @@ def _normalize_history_bar(history_row):
         return None
     return {
         "time": str(
-            _attribute(history_row, ("time", "stime"), "") or ""
+            _attribute(history_row, ("stime", "time"), "") or ""
         ),
         "open": _number(_attribute(history_row, ("open",), close_price)),
         "high": _number(_attribute(history_row, ("high",), close_price)),

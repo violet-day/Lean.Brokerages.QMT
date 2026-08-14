@@ -62,16 +62,15 @@ class FakeContextInfo:
 
     def get_market_data_ex_ori(self, **kwargs):
         return {
-            kwargs["stock_code"][0]: [
-                [
-                    "20260813093100",
-                    10.0,
-                    10.2,
-                    9.9,
-                    10.1,
-                    1200,
-                ]
-            ]
+            kwargs["stock_code"][0]: {
+                "time": [1786584660000],
+                "stime": ["20260813093100"],
+                "open": [10.0],
+                "high": [10.2],
+                "low": [9.9],
+                "close": [10.1],
+                "volume": [1200],
+            }
         }
 
 
