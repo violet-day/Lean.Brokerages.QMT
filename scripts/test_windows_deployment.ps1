@@ -28,7 +28,7 @@ $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
 $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"
 $configurationPath = Join-Path $LeanProjectRoot "lean-qmt.json"
 $liveProjectPath = Join-Path $LeanProjectRoot "china_smoke_test"
-$liveOutputPath = Join-Path $RepositoryPath ".test-logs\live-smoke-output"
+$liveOutputPath = Join-Path $LeanProjectRoot ".qmt-live-smoke-output"
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
 if ($LASTEXITCODE -ne 0) {
