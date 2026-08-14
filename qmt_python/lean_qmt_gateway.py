@@ -28,6 +28,11 @@ DEFAULT_BIND_PORT = 17890
 DEFAULT_STRATEGY_NAME = "LeanQmtGateway"
 ACCOUNT_TYPE = "STOCK"
 LOG_PREFIX = "[lean_qmt_gateway]"
+RUNTIME_LOG_PATH = os.path.join(
+    os.path.dirname(module_directory),
+    ".test-logs",
+    "qmt-gateway-runtime.log",
+)
 MAXIMUM_MESSAGE_BYTES = 1024 * 1024
 MAXIMUM_REQUESTS_PER_HANDLEBAR = 100
 MAXIMUM_CACHED_RESPONSES = 512
@@ -58,7 +63,23 @@ def _log(message, **fields):
     parts = [LOG_PREFIX, str(message)]
     for field_name in sorted(fields):
         parts.append("%s=%s" % (field_name, fields[field_name]))
-    print(" ".join(parts))
+    log_line = " ".join(parts)
+    try:
+        runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH)
+        if not os.path.isdir(runtime_log_directory):
+            os.makedirs(runtime_log_directory)
+        with open(RUNTIME_LOG_PATH, "ab") as runtime_log_file:
+            runtime_log_file.write((log_line + "\n").encode("utf-8", "replace"))
+    except Exception:
+        pass
+    print(log_line)
+
+
+_log(
+    "module_loaded",
+    module_directory=module_directory,
+    python_version=sys.version.replace(" ", "_"),
+)
 
 
 def _load_config():
@@ -1299,7 +1320,11 @@ def init(
 ):
     global _gateway
 
-    config = _load_config()
+    try:
+        config = _load_config()
+    except Exception as error:
+        _log("config_load_failed", error=repr(error))
+        raise
     account_id = config["account_id"] or str(injected_account_id or "").strip()
     _log(
         "init_start",
@@ -1316,7 +1341,13 @@ def init(
     if not callable(set_account_function):
         _log("set_account_unavailable")
         return None
-    set_account_function(account_id)
+    _log("set_account_start", account_id=account_id)
+    try:
+        set_account_function(account_id)
+    except Exception as error:
+        _log("set_account_failed", account_id=account_id, error=repr(error))
+        raise
+    _log("set_account_ok", account_id=account_id)
 
     _gateway = LeanQmtGateway(
         context_info=context_info,
@@ -1341,7 +1372,12 @@ def init(
         trading_enabled=config["trading_enabled"],
         strategy_name=config["strategy_name"],
     )
-    _gateway.start()
+    try:
+        _gateway.start()
+    except Exception as error:
+        _log("server_start_failed", error=repr(error))
+        _gateway = None
+        raise
     run_time_function = getattr(context_info, "run_time", None)
     if callable(run_time_function):
         try:
