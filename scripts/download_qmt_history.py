@@ -10,14 +10,13 @@ import sys
 import tempfile
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 
 PROTOCOL_VERSION = 1
-SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 QMT_TICKER_PATTERN = re.compile(r"^[0-9]{6}\.(SH|SZ|BJ)$")
 
 
@@ -89,7 +88,13 @@ def parse_trading_date(date_text):
 
 def parse_qmt_time(time_text):
     normalized_time_text = str(time_text or "").strip()
-    for exact_format in ("%Y%m%d%H%M%S%f", "%Y%m%d%H%M%S", "%Y%m%d"):
+    exact_format_by_length = {
+        17: "%Y%m%d%H%M%S%f",
+        14: "%Y%m%d%H%M%S",
+        8: "%Y%m%d",
+    }
+    exact_format = exact_format_by_length.get(len(normalized_time_text))
+    if exact_format is not None:
         try:
             return datetime.strptime(normalized_time_text, exact_format)
         except ValueError:

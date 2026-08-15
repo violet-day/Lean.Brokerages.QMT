@@ -6,6 +6,7 @@ from pathlib import Path
 
 from scripts.download_qmt_history import (
     normalize_ticker,
+    parse_qmt_time,
     parse_trading_date,
     quantconnect_minute_rows,
     write_quantconnect_minute_zip,
@@ -79,6 +80,10 @@ class DownloadQmtHistoryTests(unittest.TestCase):
     def test_normalizes_inputs(self):
         self.assertEqual(normalize_ticker(" 600000.sh "), "600000.SH")
         self.assertEqual(parse_trading_date("2026-08-14"), date(2026, 8, 14))
+        self.assertEqual(
+            parse_qmt_time("1723599000000").strftime("%Y-%m-%d %H:%M:%S"),
+            "2024-08-14 09:30:00",
+        )
         with self.assertRaises(ValueError):
             normalize_ticker("600000")
 
