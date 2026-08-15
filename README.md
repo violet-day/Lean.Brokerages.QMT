@@ -15,7 +15,7 @@ The Mac and Windows LEAN checkouts are fixed to commit
 
 ## MVP status
 
-Implemented and covered by fake-Gateway tests:
+Implemented and validated by contract tests and real-QMT read-only E2E:
 
 - NDJSON-over-TCP protocol v1 with account-checked `hello`, request IDs,
   timeouts, errors, events, and duplicate-request caching;
@@ -34,7 +34,6 @@ Not yet production-ready:
 - no simulated-account end-to-end run against a real QMT process;
 - no automatic reconnect, resubscription, startup reconciliation, or event
   deduplication after reconnect;
-- no LEAN image or `lean-cli` module integration;
 - no full trading-day soak, network interruption, or restart test;
 - no final field validation from captured real QMT query/callback logs.
 
@@ -63,16 +62,15 @@ QuantConnect.QmtBrokerage/
   QmtProtocol.cs              Protocol v1 DTOs
   QmtSymbolMapper.cs          China A-share/QMT code conversion
 QuantConnect.QmtBrokerage.Tests/
-  QmtFakeGatewayServer.cs     Loopback-only fake Gateway
-  ...                         Brokerage, client, mapping, and contract tests
+  QmtReadOnlyE2ETests.cs      Real-QMT non-trading E2E
+  ...                         Mapping, model, and protocol contract tests
 qmt_python/
   qmt_gateway_entry.py        Stable code copied into a QMT strategy once
   lean_qmt_gateway.py         Reloadable Gateway implementation
   qmt_local_config.example.py Local configuration template
   qmt_readonly_probe_entry.py Earlier read-only diagnostic entry
 tests/
-  test_qmt_gateway.py         Fake-QMT Python tests
-  ...                         Compatibility and read-only probe tests
+  test_python_compatibility.py QMT Python 3.6 syntax validation
 scripts/
   sync_worktree_to_windows.sh Git branch sync over SSH
   test_windows.ps1            Authoritative Windows test runner
@@ -90,12 +88,12 @@ make test
 ```
 
 The command requires a clean Git worktree, pushes the current branch, and
-fast-forwards the same branch on Windows. It then runs Python tests,
-`dotnet build`, NUnit tests, and copies the QMT assembly into the local module
-directory selected from the default LEAN image's `lean_version` and
-`target_framework` labels. It does not connect to a real QMT process and it
-never submits an order. All Gateway/Brokerage network tests use a loopback fake
-server and fake QMT functions.
+fast-forwards the same branch on Windows. It then runs Python compatibility
+tests, `dotnet build`, non-explicit NUnit contract tests, and copies the QMT
+assembly into the local module directory selected from the default LEAN image's
+`lean_version` and `target_framework` labels. It does not connect to QMT and it
+never submits an order. Real Gateway validation uses the explicit read-only E2E
+commands below.
 
 The authoritative Windows checkout is:
 
@@ -142,8 +140,9 @@ make test-live
 `make e2e-brokerage-readonly` follows the Interactive Brokers integration-test
 pattern: NUnit constructs the real `QmtGatewayClient` and `QmtBrokerage`, then
 checks the account handshake, cash, holdings, open orders, daily/minute history,
-subscription lifecycle, and reconnect against the running QMT Gateway. Both
-trading switches must be false and the test never calls an order method.
+subscription lifecycle, and an explicit disconnect/connect cycle against the
+running QMT Gateway. Both trading switches must be false and the test never
+calls an order method. This does not claim automatic fault recovery.
 
 `make e2e-readonly` runs that Brokerage test first and then `make test-live`,
 which adds the complete `lean-cli -> Docker -> LEAN Engine -> QMT` path. During
@@ -225,6 +224,6 @@ LEAN config:             qmt-trading-enabled = true
 ```
 
 If either is false, `PlaceOrder()` and `CancelOrder()` are blocked. Keep both
-false until the fake-Gateway suite, real-QMT read-only validation, and the
-simulated-account checklist in ROADMAP.md have passed. Enabling either setting
-is an operator decision and is never part of `make test`.
+false until real-QMT read-only validation and the simulated-account checklist
+in ROADMAP.md have passed. Enabling either setting is an operator decision and
+is never part of `make test`.

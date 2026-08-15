@@ -49,8 +49,8 @@ LEAN PlaceOrder
 - [x] Mac/Windows LEAN 固定为
   `d72852f25e81cf4505a9059fc037c7c49cd21825`。
 
-完整 Windows 输出保存在 `.test-logs/windows-test.log`。自动测试只使用假 QMT
-函数和本机回环 Fake Gateway，不连接真实 QMT，不读取真实账户，也不下单。
+完整 Windows 输出保存在 `.test-logs/windows-test.log`。`make test` 只执行兼容性、
+编译和纯契约测试，不连接 QMT。真实账户验证只通过显式只读 E2E 执行，不下单。
 
 ## MVP 已完成
 
@@ -64,8 +64,8 @@ LEAN PlaceOrder
 - [x] 定义行情订阅及以 `subscription_id` 退订。
 - [x] 定义 quote/order/deal/position/account/connection 事件。
 - [x] C# 客户端实现并发 request ID 关联、超时、reader loop、事件和断线通知。
-- [x] Fake TCP Gateway 覆盖握手、乱序响应、事件、错误、超时和断线。
-- [ ] 自动重连后恢复订阅和连接状态。
+- [x] 真实 QMT 只读 E2E 覆盖握手、并发查询、订阅、退订和手工重新连接。
+- [ ] 断线时主动通知并确认 LEAN 安全停止。
 
 协议详见 `docs/adr/0001-qmt-gateway-protocol.md`。
 
@@ -99,9 +99,9 @@ LEAN PlaceOrder
 - [x] 实现行情订阅/退订和 QMT tick 到 LEAN `Tick`。
 - [x] 将 order/deal callback 转成 LEAN `OrderEvent`。
 - [x] 本地与 Gateway 两个交易开关必须同时开启。
-- [x] Brokerage 和 Gateway 自动测试全部使用 fake，不接真实账户。
+- [x] 真实 QMT 只读 E2E 覆盖账户、持仓、委托、历史和行情订阅。
 - [ ] 启动时自动完成资金、持仓和未完成委托对账。
-- [ ] 断线自动重连、恢复订阅、状态恢复和事件去重。
+- [ ] 断线主动通知、人工恢复后的状态对账和事件去重。
 - [ ] 对 order/deal 重复或乱序回调增加持久化防护。
 - [ ] 补齐生产手续费、交易时段、最小下单单位和涨跌停规则。
 
@@ -125,7 +125,8 @@ LEAN PlaceOrder
 - [x] Python `TRADING_ENABLED` 默认 `False`。
 - [x] LEAN `qmt-trading-enabled` 默认 `false`。
 - [x] 任一开关关闭时，Brokerage 拒绝下单和撤单。
-- [x] 自动测试永远不修改这两个真实配置，也不连接真实 Gateway。
+- [x] `make test` 不修改真实配置，也不连接真实 Gateway。
+- [x] 真实 E2E 强制两个交易开关关闭，只执行查询和行情订阅。
 - [x] Gateway 默认仅监听 `127.0.0.1:17890`。
 - [ ] Docker 接入前配置受保护的非回环监听和最小范围 Windows 防火墙规则。
 - [ ] 实盘启用前确认端口未暴露公网；v1 是无 TLS、无认证的明文协议。
@@ -179,7 +180,7 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 ## 当前命令
 
 ```bash
-make test          # 同步后在 Windows 运行全部 fake/离线测试
+make test          # 同步后在 Windows 运行兼容性、编译和纯契约测试
 make test-windows  # 同 make test 的 Windows 工作流入口
 make package-windows # 同步、Windows 编译/测试并发布版本化本地 DLL
 make sync-windows  # 通过 Git 同步已提交分支，不测试、不操作 QMT
@@ -200,8 +201,8 @@ make stop              # 停止 LEAN 部署，不操作 QMT 客户端
 
 ## 当前阻塞与最短下一步
 
-MVP 的 fake/离线闭环和 lean-cli QMT module 已完成。当前需要完成默认
-`quantconnect/lean:latest` 拉取，再执行本地 DLL 注入的真实只读 E2E。
+MVP、lean-cli QMT module 和真实只读 E2E 已完成。当前需要完成模拟账户
+下单/撤单验证，并明确断线后的通知、人工恢复和状态对账流程。
 
 最短下一步：保持交易关闭，由用户在真实大 QMT 中手工运行 Gateway 入口；只做
 `hello → query_account → query_positions → query_orders → subscribe`，保存日志并确认
@@ -213,8 +214,8 @@ MVP 的 fake/离线闭环和 lean-cli QMT module 已完成。当前需要完成�
 |---|---|---|
 | 2026-08-13 | 建立模板式工程、Python 3.11.13 环境和 Windows 测试链路 | `.test-logs/windows-test.log` |
 | 2026-08-13 | Mac/Windows LEAN 与 Brokerage 对齐 .NET 10 | Windows SDK `10.0.400`，build 0 errors |
-| 2026-08-13 | 完成协议 v1、Python Gateway、C# 客户端和 Brokerage MVP | Python 14/14；NUnit 51/51 |
-| 2026-08-13 | 固定交易双开关和 fake-only 自动测试安全边界 | trading-disabled Python/C# 测试通过 |
+| 2026-08-13 | 完成协议 v1、Python Gateway、C# 客户端和 Brokerage MVP | Windows 编译及契约测试通过 |
+| 2026-08-13 | 固定交易双开关安全边界 | 两端默认关闭交易 |
 | 2026-08-13 | 完成 Windows Launcher/lean-cli 幂等接入和隔离配置 | QMT DLL 进入 Launcher output；CLI module load 通过 |
 | 2026-08-14 | 改为默认 Engine 镜像和版本化本地 QMT DLL | 等待真实只读 E2E |
-| 2026-08-15 | 完成真实 Brokerage 与完整 LEAN 非交易 E2E | 账号、查询、历史、订阅、重连和 LEAN Running 通过 |
+| 2026-08-15 | 完成真实 Brokerage 与完整 LEAN 非交易 E2E | 账号、查询、历史、订阅、手工连接重建和 LEAN Running 通过 |

@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using QuantConnect.Algorithm;
 using QuantConnect.Configuration;
@@ -65,7 +66,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
         [Test]
         [Timeout(180000)]
-        public void RunsReadOnlyBrokerageEndToEnd()
+        public async Task RunsReadOnlyBrokerageEndToEnd()
         {
             var cashBalances = _brokerage.GetCashBalance();
             var holdings = _brokerage.GetAccountHoldings();
@@ -76,6 +77,15 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             WriteEvidence(
                 "account",
                 $"cash_accounts={cashBalances.Count} holdings={holdings.Count} open_orders={openOrders.Count}");
+
+            var accountRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryAccount);
+            var positionsRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryPositions);
+            var ordersRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryOrders);
+            await Task.WhenAll(accountRequestTask, positionsRequestTask, ordersRequestTask);
+            Assert.That(accountRequestTask.Result.ToPayload<QmtQueryAccountPayload>().Accounts, Is.Not.Empty);
+            Assert.That(positionsRequestTask.Result.ToPayload<QmtQueryPositionsPayload>().Positions, Is.Not.Null);
+            Assert.That(ordersRequestTask.Result.ToPayload<QmtQueryOrdersPayload>().Orders, Is.Not.Null);
+            WriteEvidence("concurrent-queries", "account=ok positions=ok orders=ok");
 
             var symbol = _symbolMapper.GetLeanSymbol(
                 StockCode,
@@ -138,7 +148,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             _brokerage.Connect();
             Assert.That(_brokerage.IsConnected, Is.True);
             Assert.That(_brokerage.GetCashBalance(), Is.Not.Empty);
-            WriteEvidence("reconnect", "account_query=ok");
+            WriteEvidence("connection-reopen", "account_query=ok");
             WriteEvidence("complete", "trading=disabled");
         }
 

@@ -75,7 +75,8 @@ make test-live
 
 `make e2e-brokerage-readonly` 直接构造真实 `QmtGatewayClient` 和
 `QmtBrokerage`，验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、
-退订和重连。它要求 Gateway 与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
+退订和主动断开后的连接重建。它不验证自动故障恢复，并要求 Gateway 与 LEAN
+两端交易开关均为关闭状态，不调用下单接口。
 
 `make e2e-readonly` 先运行 Brokerage E2E，再运行下面的完整 LEAN live smoke。
 精简证据由 Windows Nginx 暴露：

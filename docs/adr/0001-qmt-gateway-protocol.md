@@ -98,7 +98,7 @@ For `market`, `limit_price` is null/omitted. Response:
 
 The response payload may be empty. `success: true` means the cancel request was accepted for processing; final order state arrives through an `order` event.
 
-When trading is disabled, the Gateway returns `success: false`, `error_code: "TRADING_DISABLED"`, and a human-readable `error_message`. Automated tests use only a fake Gateway and never enable live trading.
+When trading is disabled, the Gateway returns `success: false`, `error_code: "TRADING_DISABLED"`, and a human-readable `error_message`. Real-QMT automated validation keeps both trading switches disabled and never invokes an order operation.
 
 ### Market data
 
@@ -158,7 +158,7 @@ The Python socket thread parses requests and puts them on an inbound queue. QMT 
 
 The C# client has one reader loop and one serialized writer. A concurrent map routes responses by request ID. Each request has a timeout. Socket failure completes all pending requests exceptionally, marks the client disconnected, and emits one disconnected notification. Malformed individual JSON lines are logged and skipped; EOF or a transport exception ends the connection.
 
-Reconnect is initiated by the owning Brokerage. After reconnect it must repeat `hello` and restore active subscriptions.
+Connection loss is reported to the owning Brokerage. The current MVP does not automatically reconnect; recovery is operator-driven. Any future reconnect implementation must repeat `hello`, reconcile account state, and restore active subscriptions before reporting success.
 
 ## Security
 
@@ -168,6 +168,6 @@ Logs include operation, request ID, connection stage, account ID, and error code
 
 ## Consequences
 
-The approach isolates QMT's Python/native environment from LEAN and is simple to debug with line-oriented logs. It also makes a deterministic fake Gateway possible, so connection, timeout, response ordering, and event behavior can be tested without QMT or a brokerage account.
+The approach isolates QMT's Python/native environment from LEAN and is simple to debug with line-oriented logs. Gateway and Brokerage behavior is validated against the running QMT process with explicit non-trading E2E tests.
 
 The single TCP connection is intentionally an MVP constraint. If a stalled writer or market-data burst becomes material, protocol v2 can split command and event channels while keeping the v1 DTO semantics.
