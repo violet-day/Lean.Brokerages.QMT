@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using NUnit.Framework;
 using QuantConnect.Algorithm;
+using QuantConnect.Configuration;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
 using QuantConnect.Securities;
@@ -27,6 +28,16 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             var gatewayHost = Environment.GetEnvironmentVariable("QMT_E2E_GATEWAY_HOST") ?? "127.0.0.1";
             var gatewayPortText = Environment.GetEnvironmentVariable("QMT_E2E_GATEWAY_PORT") ?? "17890";
             Assert.That(int.TryParse(gatewayPortText, out var gatewayPort), Is.True);
+            var dataFolder = Environment.GetEnvironmentVariable("QMT_E2E_DATA_FOLDER");
+            Assert.That(dataFolder, Is.Not.Null.And.Not.Empty);
+
+            Environment.CurrentDirectory = TestContext.CurrentContext.TestDirectory;
+            Config.Reset();
+            Config.Set("data-folder", dataFolder);
+            Config.Set("data-directory", dataFolder);
+            Globals.Reset();
+            MarketHoursDatabase.Reset();
+            SymbolPropertiesDatabase.Reset();
 
             _gatewayClient = new QmtGatewayClient(
                 gatewayHost,
