@@ -25,18 +25,20 @@ class RuntimeLogTests(unittest.TestCase):
     def test_runtime_log_is_timestamped_and_rotated(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             original_runtime_log_path = lean_qmt_gateway.RUNTIME_LOG_PATH
+            original_maximum_runtime_log_bytes = (
+                lean_qmt_gateway.MAXIMUM_RUNTIME_LOG_BYTES
+            )
+            original_runtime_log_backup_count = (
+                lean_qmt_gateway.RUNTIME_LOG_BACKUP_COUNT
+            )
             try:
                 runtime_log_path = os.path.join(
                     temporary_directory,
                     "qmt-gateway-runtime.log",
                 )
-                lean_qmt_gateway._runtime_logger = (
-                    lean_qmt_gateway._configure_runtime_logger(
-                        runtime_log_path,
-                        maximum_runtime_log_bytes=160,
-                        runtime_log_backup_count=2,
-                    )
-                )
+                lean_qmt_gateway.RUNTIME_LOG_PATH = runtime_log_path
+                lean_qmt_gateway.MAXIMUM_RUNTIME_LOG_BYTES = 160
+                lean_qmt_gateway.RUNTIME_LOG_BACKUP_COUNT = 2
 
                 with redirect_stdout(io.StringIO()):
                     for sequence_number in range(8):
@@ -58,12 +60,12 @@ class RuntimeLogTests(unittest.TestCase):
                 )
                 self.assertIn("sequence=7", current_log_line)
             finally:
-                lean_qmt_gateway._runtime_logger = (
-                    lean_qmt_gateway._configure_runtime_logger(
-                        original_runtime_log_path,
-                        lean_qmt_gateway.MAXIMUM_RUNTIME_LOG_BYTES,
-                        lean_qmt_gateway.RUNTIME_LOG_BACKUP_COUNT,
-                    )
+                lean_qmt_gateway.RUNTIME_LOG_PATH = original_runtime_log_path
+                lean_qmt_gateway.MAXIMUM_RUNTIME_LOG_BYTES = (
+                    original_maximum_runtime_log_bytes
+                )
+                lean_qmt_gateway.RUNTIME_LOG_BACKUP_COUNT = (
+                    original_runtime_log_backup_count
                 )
 
 
