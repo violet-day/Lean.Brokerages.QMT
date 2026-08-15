@@ -29,6 +29,13 @@ def default_lean_data_root():
     return Path.home() / "Workspace" / "quant" / "lean-project" / "data"
 
 
+def default_gateway_host():
+    configured_gateway_host = os.environ.get("QMT_GATEWAY_HOST")
+    if configured_gateway_host:
+        return configured_gateway_host
+    return "127.0.0.1" if os.name == "nt" else "192.168.50.135"
+
+
 def parse_arguments():
     argument_parser = argparse.ArgumentParser(
         description="Download one day of QMT minute history in LEAN/QC format."
@@ -45,8 +52,8 @@ def parse_arguments():
     )
     argument_parser.add_argument(
         "--host",
-        default=os.environ.get("QMT_GATEWAY_HOST", "127.0.0.1"),
-        help="QMT Gateway host (default: 127.0.0.1).",
+        default=default_gateway_host(),
+        help="QMT Gateway host; defaults to the Windows QMT host on macOS.",
     )
     argument_parser.add_argument(
         "--port",

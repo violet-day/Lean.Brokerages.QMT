@@ -1,10 +1,13 @@
+import os
 import tempfile
 import unittest
 import zipfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.download_qmt_history import (
+    default_gateway_host,
     normalize_ticker,
     parse_qmt_time,
     parse_trading_date,
@@ -78,6 +81,11 @@ class DownloadQmtHistoryTests(unittest.TestCase):
             )
 
     def test_normalizes_inputs(self):
+        expected_default_host = "127.0.0.1" if os.name == "nt" else "192.168.50.135"
+        with patch.dict(os.environ, {"QMT_GATEWAY_HOST": ""}):
+            self.assertEqual(default_gateway_host(), expected_default_host)
+        with patch.dict(os.environ, {"QMT_GATEWAY_HOST": "qmt.example"}):
+            self.assertEqual(default_gateway_host(), "qmt.example")
         self.assertEqual(normalize_ticker(" 600000.sh "), "600000.SH")
         self.assertEqual(parse_trading_date("2026-08-14"), date(2026, 8, 14))
         self.assertEqual(

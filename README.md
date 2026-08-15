@@ -185,8 +185,9 @@ uv run --locked python scripts/download_qmt_history.py \
 The script writes the LEAN/QC minute ZIP to
 `data/equity/china/minute/600000/20260814_trade.zip`. On Windows the default
 data root is `C:\Users\nemo\lean_project\data`; on macOS it is
-`~/Workspace/quant/lean-project/data`. Use `--host 192.168.50.135` when calling
-the Windows Gateway from macOS, or `--data-root` to override the destination.
+`~/Workspace/quant/lean-project/data`. On macOS the Gateway defaults to
+`192.168.50.135`, so only `--ticker` and `--date` are required. Use
+`--data-root` or `--host` only when overriding these defaults.
 
 ## One-time QMT Gateway setup
 
