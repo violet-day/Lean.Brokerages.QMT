@@ -6,12 +6,12 @@ repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
 
-if [[ "$action" != "install" && "$action" != "test" && "$action" != "logs-start" && "$action" != "logs-stop" && "$action" != "logs-status" ]]; then
-    echo "usage: $0 {install|test|logs-start|logs-stop|logs-status}" >&2
+if [[ "$action" != "install" && "$action" != "test" && "$action" != "brokerage-e2e-readonly" && "$action" != "logs-start" && "$action" != "logs-stop" && "$action" != "logs-status" ]]; then
+    echo "usage: $0 {install|test|brokerage-e2e-readonly|logs-start|logs-stop|logs-status}" >&2
     exit 2
 fi
 
-if [[ "$action" == "install" || "$action" == "test" || "$action" == "logs-start" ]]; then
+if [[ "$action" == "install" || "$action" == "test" || "$action" == "brokerage-e2e-readonly" || "$action" == "logs-start" ]]; then
     echo "[qmt-deploy] host=mac stage=sync status=start action=$action"
     "$repository_directory/scripts/sync_worktree_to_windows.sh"
     echo "[qmt-deploy] host=mac stage=sync status=ok action=$action"
@@ -24,6 +24,10 @@ case "$action" in
         ;;
     test)
         powershell_script_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_deployment.ps1'
+        powershell_arguments=""
+        ;;
+    brokerage-e2e-readonly)
+        powershell_script_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_readonly.ps1'
         powershell_arguments=""
         ;;
     logs-start)

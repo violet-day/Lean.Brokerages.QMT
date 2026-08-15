@@ -1,4 +1,4 @@
-.PHONY: test test-windows package-windows sync-windows sync-smoke install-windows test-live serve-live-logs stop-live-logs status-live-logs
+.PHONY: test test-windows package-windows sync-windows sync-smoke install-windows e2e-brokerage-readonly e2e-readonly test-live serve-live-logs stop-live-logs status-live-logs
 
 test:
 	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build -> Windows NUnit tests"'
@@ -18,6 +18,13 @@ sync-smoke:
 
 install-windows:
 	@./scripts/run_windows_deployment.sh install
+
+e2e-brokerage-readonly:
+	@./scripts/run_windows_deployment.sh brokerage-e2e-readonly
+
+e2e-readonly:
+	@$(MAKE) e2e-brokerage-readonly
+	@$(MAKE) test-live
 
 test-live: sync-smoke
 	@./scripts/run_windows_deployment.sh test
