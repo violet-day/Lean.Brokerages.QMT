@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using NUnit.Framework;
+using QuantConnect.Algorithm;
 using QuantConnect.Configuration;
 using QuantConnect.Orders;
 using QuantConnect.Securities;
@@ -104,7 +105,18 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 stockCode,
                 SecurityType.Equity,
                 QmtSymbolMapper.MarketName);
-            var order = new LimitOrder(symbol, quantity, limitPrice, DateTime.UtcNow);
+            var algorithm = new QCAlgorithm();
+            var submitOrderRequest = new SubmitOrderRequest(
+                OrderType.Limit,
+                SecurityType.Equity,
+                symbol,
+                quantity,
+                0m,
+                limitPrice,
+                DateTime.UtcNow,
+                string.Empty);
+            algorithm.Transactions.SetOrderId(submitOrderRequest);
+            var order = (LimitOrder)Order.CreateOrder(submitOrderRequest);
             _orderProvider.Add(order);
 
             var receivedStatuses = new ConcurrentQueue<OrderStatus>();
@@ -362,8 +374,6 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         {
             private readonly object _ordersLock = new object();
             private readonly List<Order> _orders = new List<Order>();
-            private int _nextOrderId = (int)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 1_000_000_000);
-
             public int OrdersCount
             {
                 get
@@ -377,7 +387,6 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
             public void Add(Order order)
             {
-                order.Id = Interlocked.Increment(ref _nextOrderId);
                 lock (_ordersLock)
                 {
                     _orders.Add(order);
@@ -391,7 +400,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     var order = _orders.FirstOrDefault(existingOrder => existingOrder.Id == orderIdChangedEvent.OrderId);
                     if (order != null)
                     {
-                        order.BrokerId = orderIdChangedEvent.BrokerId;
+                        order.BrokerId.Clear();
+                        order.BrokerId.AddRange(orderIdChangedEvent.BrokerId);
                     }
                 }
             }
