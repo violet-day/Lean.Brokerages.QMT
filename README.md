@@ -165,8 +165,9 @@ The physical log directories live under `C:\Users\nemo\lean_logs`. Project
 to `lean_logs\broker\qmt-gateway-runtime.log`. The Python Gateway rotates that
 file at 5 MiB and keeps three backups. Build and deployment test logs remain
 private under the repository `.test-logs`. Windows serves its own logs directly;
-they are not copied to macOS. Nginx mounts only the unified root directory and
-runs as persistent Windows infrastructure, not as a routine Make workflow.
+they are not copied to macOS. Native Windows Nginx serves only the unified root
+directory on port 8000 and runs as the `QmtLiveLogs` startup task. Log access is
+independent of Docker Desktop, WSL, and LEAN containers.
 
 ## One-time QMT Gateway setup
 

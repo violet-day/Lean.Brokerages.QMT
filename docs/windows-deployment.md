@@ -132,6 +132,9 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 
 ## 常规验证与日志
 
+日志由 Windows 原生 Nginx 直接暴露 `C:\Users\nemo\lean_logs`，通过
+`QmtLiveLogs` 开机计划任务常驻，不依赖 Docker Desktop、WSL 或 LEAN 容器。
+
 ```bash
 make sync-windows    # 仅通过 Git 同步已提交分支
 make install-windows # 一次性配置 lean-cli 和 lean-qmt.json

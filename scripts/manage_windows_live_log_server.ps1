@@ -6,8 +6,8 @@ param(
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
     [string]$SmokeTestLivePath = "C:\Users\nemo\lean_project\china_smoke_test\live",
     [string]$TopGainerLivePath = "C:\Users\nemo\lean_project\a top gainer\live",
-    [string]$ContainerName = "qmt-live-logs",
-    [string]$NginxImage = "nginx:alpine",
+    [string]$NginxInstallPath = "C:\Users\nemo\tools\nginx-1.30.4",
+    [string]$NginxArchivePath = "",
     [string]$AllowedRemoteAddress = "192.168.50.0/24",
     [int]$Port = 8000
 )
@@ -15,21 +15,17 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $firewallRuleName = "Qmt-Live-Logs-In-TCP"
-$nginxConfigurationPath = Join-Path $RepositoryPath "deploy\nginx\default.conf"
-$dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
+$scheduledTaskName = "QmtLiveLogs"
+$expectedNginxArchiveSha256 = "159294214d403f34f0bb4ae598801ab1f6a0d8c8da707f8f08748e294a222a01"
+$repositoryNginxConfigurationPath = Join-Path $RepositoryPath "deploy\nginx\nginx.conf"
+$installedNginxConfigurationPath = Join-Path $NginxInstallPath "conf\qmt-live-logs.conf"
+$nginxExecutable = Join-Path $NginxInstallPath "nginx.exe"
+$nginxPrefix = $NginxInstallPath.Replace("\", "/") + "/"
 
 function Write-LiveLogServerLog {
     param([string]$Message)
 
     [Console]::Error.WriteLine("[qmt-live-logs] $Message")
-}
-
-function Test-ContainerExists {
-    $matchingContainerNames = @(& $dockerExecutable ps --all --filter "name=^/$ContainerName$" --format "{{.Names}}")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not query Docker containers."
-    }
-    return $matchingContainerNames -contains $ContainerName
 }
 
 function Set-CanonicalLogDirectory {
@@ -82,38 +78,71 @@ function Set-CanonicalLogDirectory {
     Write-LiveLogServerLog "stage=link status=created link=$SourcePath target=$CanonicalPath"
 }
 
-& $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Docker Desktop is not ready."
+function Stop-NativeNginx {
+    $scheduledTask = Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue
+    if ($scheduledTask) {
+        Stop-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $scheduledTaskName -Confirm:$false
+    }
+
+    Get-Process nginx -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($NginxInstallPath, [System.StringComparison]::OrdinalIgnoreCase) } |
+        Stop-Process -Force
+}
+
+function Install-NativeNginx {
+    if (Test-Path -LiteralPath $nginxExecutable) {
+        return
+    }
+    if (Test-Path -LiteralPath $NginxInstallPath) {
+        throw "The Nginx install directory is incomplete: $NginxInstallPath"
+    }
+    if (-not $NginxArchivePath -or -not (Test-Path -LiteralPath $NginxArchivePath)) {
+        throw "The official Windows Nginx archive is required for first install: $NginxArchivePath"
+    }
+    $archiveSha256 = (Get-FileHash -LiteralPath $NginxArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($archiveSha256 -ne $expectedNginxArchiveSha256) {
+        throw "The Nginx archive SHA-256 does not match the pinned official nginx-1.30.4.zip."
+    }
+
+    $toolsDirectory = Split-Path -Parent $NginxInstallPath
+    New-Item -ItemType Directory -Path $toolsDirectory -Force | Out-Null
+    Expand-Archive -LiteralPath $NginxArchivePath -DestinationPath $toolsDirectory
+    if (-not (Test-Path -LiteralPath $nginxExecutable)) {
+        throw "The archive did not install nginx.exe at $nginxExecutable"
+    }
+    Write-LiveLogServerLog "stage=install status=ok version=1.30.4 path=$NginxInstallPath sha256=$archiveSha256"
 }
 
 if ($Action -eq "Status") {
-    if (-not (Test-ContainerExists)) {
-        Write-LiveLogServerLog "stage=status status=stopped container=$ContainerName url=http://192.168.50.135:$Port/"
-        exit 0
+    $scheduledTask = Get-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue
+    $nginxProcesses = @(Get-Process nginx -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($NginxInstallPath, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    $httpStatusCode = 0
+    try {
+        $httpStatusCode = [int](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2).StatusCode
     }
-
-    $containerStatus = & $dockerExecutable inspect --format "{{.State.Status}}" $ContainerName
-    $publishedPorts = & $dockerExecutable port $ContainerName 80 2>$null
-    Write-LiveLogServerLog "stage=status status=$containerStatus container=$ContainerName ports=$publishedPorts url=http://192.168.50.135:$Port/"
+    catch {
+    }
+    $status = if ($scheduledTask -and $nginxProcesses.Count -gt 0 -and $httpStatusCode -eq 200) { "running" } else { "stopped" }
+    Write-LiveLogServerLog "stage=status status=$status task_state=$($scheduledTask.State) processes=$($nginxProcesses.Count) http_status=$httpStatusCode url=http://192.168.50.135:$Port/"
     exit 0
 }
 
 if ($Action -eq "Stop") {
-    if (Test-ContainerExists) {
-        & $dockerExecutable rm --force $ContainerName | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not remove the Nginx live log container."
-        }
-    }
+    Stop-NativeNginx
     Get-NetFirewallRule -Name $firewallRuleName -ErrorAction SilentlyContinue | Disable-NetFirewallRule
-    Write-LiveLogServerLog "stage=stop status=ok container=$ContainerName"
+    Write-LiveLogServerLog "stage=stop status=ok task=$scheduledTaskName"
     exit 0
 }
 
-if (-not (Test-Path -LiteralPath $nginxConfigurationPath)) {
-    throw "The Nginx configuration is missing: $nginxConfigurationPath"
+if (-not (Test-Path -LiteralPath $repositoryNginxConfigurationPath)) {
+    throw "The Nginx configuration is missing: $repositoryNginxConfigurationPath"
 }
+
+Install-NativeNginx
+Stop-NativeNginx
 
 New-Item -ItemType Directory -Path $LogRootPath -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $LogRootPath "broker") -Force | Out-Null
@@ -127,28 +156,18 @@ foreach ($logSource in $logSources) {
         -CanonicalPath (Join-Path $LogRootPath $logSource.Name)
 }
 
-if (Test-ContainerExists) {
-    & $dockerExecutable rm --force $ContainerName | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not replace the existing Nginx live log container."
-    }
+Copy-Item -LiteralPath $repositoryNginxConfigurationPath -Destination $installedNginxConfigurationPath -Force
+$configurationTestOutput = & $nginxExecutable -t -p $nginxPrefix -c "conf\qmt-live-logs.conf" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $configurationTestOutput | ForEach-Object { Write-LiveLogServerLog "nginx=$_" }
+    throw "The native Nginx configuration is invalid."
 }
+Write-LiveLogServerLog "stage=config status=ok path=$installedNginxConfigurationPath"
 
 $portListener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
 if ($portListener) {
-    throw "Windows port $Port is already in use by process $($portListener[0].OwningProcess)."
-}
-
-$matchingImageIds = @(& $dockerExecutable image ls --quiet $NginxImage)
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not query Docker images."
-}
-if ($matchingImageIds.Count -eq 0) {
-    Write-LiveLogServerLog "stage=image status=pull image=$NginxImage"
-    & $dockerExecutable pull $NginxImage
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not pull the Nginx image: $NginxImage"
-    }
+    $ownerProcess = Get-Process -Id $portListener[0].OwningProcess -ErrorAction SilentlyContinue
+    throw "Windows port $Port is already in use by process $($portListener[0].OwningProcess) ($($ownerProcess.ProcessName))."
 }
 
 $existingFirewallRule = Get-NetFirewallRule -Name $firewallRuleName -ErrorAction SilentlyContinue
@@ -157,7 +176,7 @@ if ($existingFirewallRule) {
 }
 New-NetFirewallRule `
     -Name $firewallRuleName `
-    -DisplayName "QMT live logs (Nginx)" `
+    -DisplayName "QMT live logs (native Nginx)" `
     -Enabled True `
     -Direction Inbound `
     -Protocol TCP `
@@ -165,23 +184,29 @@ New-NetFirewallRule `
     -LocalPort $Port `
     -RemoteAddress $AllowedRemoteAddress | Out-Null
 
-$dockerArguments = @(
-    "run",
-    "--detach",
-    "--name", $ContainerName,
-    "--restart", "unless-stopped",
-    "--publish", "${Port}:80",
-    "--mount", "type=bind,source=$LogRootPath,target=/usr/share/nginx/html,readonly",
-    "--mount", "type=bind,source=$nginxConfigurationPath,target=/etc/nginx/conf.d/default.conf,readonly"
-)
-$dockerArguments += $NginxImage
-$containerId = & $dockerExecutable @dockerArguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not start the Nginx live log container."
-}
-Write-LiveLogServerLog "stage=container status=started container=$ContainerName id=$containerId"
+$scheduledTaskAction = New-ScheduledTaskAction `
+    -Execute $nginxExecutable `
+    -Argument "-p `"$nginxPrefix`" -c `"conf\qmt-live-logs.conf`"" `
+    -WorkingDirectory $NginxInstallPath
+$scheduledTaskTrigger = New-ScheduledTaskTrigger -AtStartup
+$scheduledTaskPrincipal = New-ScheduledTaskPrincipal `
+    -UserId "SYSTEM" `
+    -LogonType ServiceAccount `
+    -RunLevel Highest
+$scheduledTaskSettings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew
+Register-ScheduledTask `
+    -TaskName $scheduledTaskName `
+    -Action $scheduledTaskAction `
+    -Trigger $scheduledTaskTrigger `
+    -Principal $scheduledTaskPrincipal `
+    -Settings $scheduledTaskSettings | Out-Null
+Start-ScheduledTask -TaskName $scheduledTaskName
 
-$verificationPaths = @("", "smoke_test/", "broker/", "a-top-gainer/")
+$verificationPaths = @("", "smoke_test/", "broker/", "a-top-gainer/", "e2e/")
 foreach ($verificationPath in $verificationPaths) {
     $verificationDeadline = (Get-Date).AddSeconds(15)
     $httpStatusCode = 0
@@ -195,9 +220,8 @@ foreach ($verificationPath in $verificationPaths) {
         }
     }
     if ($httpStatusCode -ne 200) {
-        & $dockerExecutable logs $ContainerName 2>&1 | ForEach-Object { Write-LiveLogServerLog "nginx=$_" }
-        throw "Nginx did not serve '/$verificationPath' on Windows port $Port."
+        throw "Native Nginx did not serve '/$verificationPath' on Windows port $Port."
     }
 }
 
-Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage root=$LogRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
+Write-LiveLogServerLog "stage=start status=ok runtime=native-windows task=$scheduledTaskName root=$LogRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
