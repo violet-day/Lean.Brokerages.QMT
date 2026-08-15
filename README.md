@@ -116,9 +116,9 @@ saved to:
 Latest recorded Windows evidence:
 
 ```text
-Python: 14/14 passed
+Python tests: passed
 .NET build: 0 errors
-NUnit: 51/51 passed
+NUnit tests: passed
 ```
 
 Commit the local branch before synchronization. To push it to `origin` and
@@ -134,7 +134,24 @@ test with the default `quantconnect/lean:latest` image:
 ```bash
 make install-windows
 make package-windows
+make e2e-brokerage-readonly
+make e2e-readonly
 make test-live
+```
+
+`make e2e-brokerage-readonly` follows the Interactive Brokers integration-test
+pattern: NUnit constructs the real `QmtGatewayClient` and `QmtBrokerage`, then
+checks the account handshake, cash, holdings, open orders, daily/minute history,
+subscription lifecycle, and reconnect against the running QMT Gateway. Both
+trading switches must be false and the test never calls an order method.
+
+`make e2e-readonly` runs that Brokerage test first and then `make test-live`,
+which adds the complete `lean-cli -> Docker -> LEAN Engine -> QMT` path. During
+closed market hours the live tick stage is reported as skipped, not passed.
+The latest concise Brokerage evidence is served from Windows at:
+
+```text
+http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log
 ```
 
 Windows live logs are served read-only through Nginx on the LAN:
@@ -143,6 +160,7 @@ Windows live logs are served read-only through Nginx on the LAN:
 http://192.168.50.135:8000/smoke_test/
 http://192.168.50.135:8000/broker/
 http://192.168.50.135:8000/a-top-gainer/
+http://192.168.50.135:8000/e2e/
 ```
 
 The physical log directories live under `C:\Users\nemo\lean_logs`. Project

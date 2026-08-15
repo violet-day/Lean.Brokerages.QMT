@@ -116,6 +116,8 @@ $containerId = $null
 $containerLogText = ""
 $historyPassed = $false
 $accountPassed = $false
+$positionsPassed = $false
+$ordersPassed = $false
 $algorithmInitializationPassed = $false
 $minuteBarPassed = $false
 $subscriptionPassed = $false
@@ -136,7 +138,6 @@ try {
     if ($leanOutput) {
         $leanOutputText = ($leanOutput | Out-String)
         [System.IO.File]::AppendAllText($liveTestLogPath, $leanOutputText, $utf8Encoding)
-        [Console]::Error.Write($leanOutputText)
     }
     if ($leanExitCode -ne 0) {
         throw "lean live deploy failed with exit code $leanExitCode."
@@ -160,12 +161,14 @@ try {
         $minuteHistoryPassed = $containerLogText.Contains("QmtBrokerage.GetHistory(): status=ok symbol=600000 resolution=Minute")
         $historyPassed = $dailyHistoryPassed -and $minuteHistoryPassed
         $accountPassed = $containerLogText.Contains("QmtBrokerage.GetCashBalance(): status=ok accounts=1")
+        $positionsPassed = $containerLogText.Contains("QmtBrokerage.GetAccountHoldings(): status=ok")
+        $ordersPassed = $containerLogText.Contains("QmtBrokerage.GetOpenOrders(): status=ok")
         $subscriptionPassed = $containerLogText.Contains("QmtBrokerage.Subscribe(): status=ok symbol=600000")
         $algorithmInitializationPassed = $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
         $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
         $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
 
-        if ($historyPassed -and $accountPassed -and $subscriptionPassed -and $algorithmInitializationPassed) {
+        if ($historyPassed -and $accountPassed -and $positionsPassed -and $ordersPassed -and $subscriptionPassed -and $algorithmInitializationPassed) {
             if ($minuteBarPassed -and $completed) {
                 break
             }
@@ -194,7 +197,6 @@ try {
     $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
     $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
     [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
-    [Console]::Error.Write($containerLogText)
 }
 finally {
     if ($containerId) {
@@ -211,6 +213,12 @@ if (-not $historyPassed) {
 if (-not $accountPassed) {
     throw "The real QMT account query success marker was not found."
 }
+if (-not $positionsPassed) {
+    throw "The real QMT positions query success marker was not found."
+}
+if (-not $ordersPassed) {
+    throw "The real QMT open-orders query success marker was not found."
+}
 if (-not $subscriptionPassed) {
     throw "The real QMT subscription success marker was not found."
 }
@@ -224,4 +232,13 @@ if (-not ($minuteBarPassed -and $completed) -and -not $marketClosedPassed) {
     throw "Neither a real QMT minute TradeBar nor the closed-market marker was found."
 }
 $minuteBarStatus = if ($minuteBarPassed) { "ok" } else { "deferred_market_closed" }
-Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_root=$liveRootPath"
+$latestLiveOutputDirectory = Get-ChildItem -LiteralPath $liveRootPath -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+$outputUrl = if ($latestLiveOutputDirectory) {
+    "http://192.168.50.135:8000/smoke_test/$($latestLiveOutputDirectory.Name)/"
+}
+else {
+    "http://192.168.50.135:8000/smoke_test/"
+}
+Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok positions=ok orders=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_url=$outputUrl"

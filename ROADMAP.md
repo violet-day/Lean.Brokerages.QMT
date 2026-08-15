@@ -4,7 +4,7 @@
 部署的完成状态。QMT 是 Brokerage/交易执行端，目标市场是 China A-share
 （上海、深圳、北京交易所）；两者不是同一个概念。
 
-最后更新：2026-08-14
+最后更新：2026-08-15
 
 ## 目标架构
 
@@ -45,7 +45,7 @@ LEAN PlaceOrder
 - [x] Mac/Windows 离线测试环境固定 Python `3.11.13`。
 - [x] QMT 策略/Gateway 代码保持定制 Python `3.6.8` 语法兼容。
 - [x] `make test` 只在 Windows 执行 Python、C# 编译和 NUnit 测试。
-- [x] 最新记录：Python 14/14、NUnit 51/51、C# build 0 errors。
+- [x] 最新记录：Windows Python/NUnit tests 通过、C# build 0 errors。
 - [x] Mac/Windows LEAN 固定为
   `d72852f25e81cf4505a9059fc037c7c49cd21825`。
 
@@ -139,7 +139,7 @@ LEAN PlaceOrder
 - [x] Windows 从默认镜像读取 `lean_version` 和 `target_framework`。
 - [x] Windows 编译、测试 QMT 后，将 DLL 发布到对应版本的本地模块目录。
 - [x] live deploy 通过只读 volume 将本地 QMT DLL 注入 Launcher output。
-- [ ] 用默认镜像完成真实 QMT 只读 E2E。
+- [x] 用默认镜像完成真实 QMT 只读 E2E。
 
 ### E. lean-cli 集成
 
@@ -184,6 +184,8 @@ make test-windows  # 同 make test 的 Windows 工作流入口
 make package-windows # 同步、Windows 编译/测试并发布版本化本地 DLL
 make sync-windows  # 通过 Git 同步已提交分支，不测试、不操作 QMT
 make install-windows # 验证 lean-cli、恢复默认镜像并生成 lean-qmt.json
+make e2e-brokerage-readonly # 真实 QMT Brokerage 非交易 E2E
+make e2e-readonly   # Brokerage E2E + 完整 LEAN live smoke
 make test-live     # 默认镜像 + 本地 QMT DLL 的真实只读 E2E
 ```
 
@@ -215,3 +217,4 @@ MVP 的 fake/离线闭环和 lean-cli QMT module 已完成。当前需要完成�
 | 2026-08-13 | 固定交易双开关和 fake-only 自动测试安全边界 | trading-disabled Python/C# 测试通过 |
 | 2026-08-13 | 完成 Windows Launcher/lean-cli 幂等接入和隔离配置 | QMT DLL 进入 Launcher output；CLI module load 通过 |
 | 2026-08-14 | 改为默认 Engine 镜像和版本化本地 QMT DLL | 等待真实只读 E2E |
+| 2026-08-15 | 完成真实 Brokerage 与完整 LEAN 非交易 E2E | 账号、查询、历史、订阅、重连和 LEAN Running 通过 |

@@ -68,7 +68,20 @@ Git push/fetch/fast-forward
 ## 真实只读全链路验证
 
 ```bash
+make e2e-brokerage-readonly
+make e2e-readonly
 make test-live
+```
+
+`make e2e-brokerage-readonly` 直接构造真实 `QmtGatewayClient` 和
+`QmtBrokerage`，验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、
+退订和重连。它要求 Gateway 与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
+
+`make e2e-readonly` 先运行 Brokerage E2E，再运行下面的完整 LEAN live smoke。
+精简证据由 Windows Nginx 暴露：
+
+```text
+http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log
 ```
 
 该命令要求用户已在大 QMT 中手工运行真实 Gateway，随后执行：
@@ -122,9 +135,11 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 ## 常规验证与日志
 
 ```bash
-make test             # Windows Python 14/14、.NET build、NUnit 51/51
+make test             # Windows Python tests、.NET build、NUnit tests
 make install-windows  # 可重复执行，验证安装幂等性
 make package-windows  # Windows 编译、测试并发布版本化本地 DLL
+make e2e-brokerage-readonly # 真实 QMT Brokerage 非交易 E2E
+make e2e-readonly     # Brokerage E2E + 完整 LEAN live smoke
 make test-live        # 真实 QMT 只读完整部署 smoke
 ```
 
