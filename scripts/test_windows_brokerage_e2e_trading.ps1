@@ -1,12 +1,4 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$ExpectedSimulationAccountId,
-    [Parameter(Mandatory = $true)]
-    [string]$StockCode,
-    [Parameter(Mandatory = $true)]
-    [int]$Quantity,
-    [Parameter(Mandatory = $true)]
-    [string]$LimitPrice,
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$LeanConfigurationPath = "C:\Users\nemo\lean_project\lean-qmt.json",
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
@@ -15,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$expectedSimulationAccountId = "86033767"
 $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
@@ -69,7 +62,7 @@ function Invoke-CapturedCommand {
 }
 
 $currentStage = "preflight"
-Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_confirmation=simulation stock_code=$StockCode quantity=$Quantity limit_price=$LimitPrice"
+Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_confirmation=simulation stock_code=600000.SH quantity=100 limit_price=automatic"
 try {
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
@@ -77,25 +70,11 @@ try {
     }
     $configuration = Get-Content -LiteralPath $LeanConfigurationPath -Raw | ConvertFrom-Json
     $configuredAccountId = [string]$configuration."qmt-account-id"
-    if ($configuredAccountId -ne $ExpectedSimulationAccountId) {
-        throw "The configured QMT account does not match the explicitly confirmed simulation account."
+    if ($configuredAccountId -ne $expectedSimulationAccountId) {
+        throw "The configured QMT account is not the fixed simulation account used by this test."
     }
     if ([string]$configuration."qmt-trading-enabled" -ne "true") {
         throw "qmt-trading-enabled must be true for the explicit simulation-account trading test."
-    }
-    if ($Quantity -le 0) {
-        throw "Quantity must be positive."
-    }
-    $parsedLimitPrice = [decimal]0
-    if (-not [decimal]::TryParse(
-        $LimitPrice,
-        [System.Globalization.NumberStyles]::Number,
-        [System.Globalization.CultureInfo]::InvariantCulture,
-        [ref]$parsedLimitPrice) -or $parsedLimitPrice -le [decimal]0) {
-        throw "LimitPrice must be a positive invariant-culture decimal number."
-    }
-    if ($StockCode -notmatch "^[0-9]{6}\.(SH|SZ|BJ)$") {
-        throw "StockCode must use the format 600000.SH, 000001.SZ, or 430001.BJ."
     }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
@@ -135,13 +114,10 @@ try {
     $currentStage = "brokerage-trading-test"
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     $env:QMT_TRADING_E2E_CONFIRMATION = "SIMULATION"
-    $env:QMT_TRADING_E2E_ACCOUNT_ID = $ExpectedSimulationAccountId
+    $env:QMT_TRADING_E2E_ACCOUNT_ID = $configuredAccountId
     $env:QMT_TRADING_E2E_GATEWAY_HOST = "127.0.0.1"
     $env:QMT_TRADING_E2E_GATEWAY_PORT = [string]$GatewayPort
     $env:QMT_TRADING_E2E_DATA_FOLDER = "C:\Users\nemo\lean\Lean\Data"
-    $env:QMT_TRADING_E2E_STOCK_CODE = $StockCode
-    $env:QMT_TRADING_E2E_QUANTITY = [string]$Quantity
-    $env:QMT_TRADING_E2E_LIMIT_PRICE = $LimitPrice
     $env:QMT_TRADING_E2E_LOG_PATH = $userLogPath
     $env:DOTNET_CLI_UI_LANGUAGE = "en-US"
     $testResult = Invoke-CapturedCommand $dotnetExecutable @(
@@ -176,9 +152,6 @@ finally {
     Remove-Item Env:QMT_TRADING_E2E_GATEWAY_HOST -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_GATEWAY_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_DATA_FOLDER -ErrorAction SilentlyContinue
-    Remove-Item Env:QMT_TRADING_E2E_STOCK_CODE -ErrorAction SilentlyContinue
-    Remove-Item Env:QMT_TRADING_E2E_QUANTITY -ErrorAction SilentlyContinue
-    Remove-Item Env:QMT_TRADING_E2E_LIMIT_PRICE -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_LOG_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:DOTNET_CLI_UI_LANGUAGE -ErrorAction SilentlyContinue
 }

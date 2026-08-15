@@ -134,7 +134,7 @@ make sync-windows
 make install-windows
 make test
 make test-smoke
-make test-trading TRADING_ACCOUNT_ID=<simulation-account-id> TRADING_LIMIT_PRICE=<limit-price>
+make test-trading
 ```
 
 `make test-smoke` first runs the real Brokerage NUnit test, which checks the
@@ -229,15 +229,14 @@ is never part of `make test`.
 The explicit simulation-account order/cancel test is:
 
 ```bash
-make test-trading \
-  TRADING_ACCOUNT_ID=<simulation-account-id> \
-  TRADING_LIMIT_PRICE=<non-marketable-limit-price>
+make test-trading
 ```
 
-`TRADING_SYMBOL` defaults to `600000.SH` and `TRADING_QUANTITY` defaults to
-`100`. The command refuses to run unless the provided account matches the
-Windows `lean-qmt.json`, `qmt-trading-enabled=true`, and the running Gateway
-reports `TRADING_ENABLED=True`. It places one limit order, requires the
+The command is fixed to simulation account `86033767`, `600000.SH`, and `100`
+shares. It reads the account from Windows `lean-qmt.json`, verifies it through
+the Gateway handshake, and calculates a non-marketable limit price from the
+latest quote. It refuses to run unless `qmt-trading-enabled=true` and the running
+Gateway reports `TRADING_ENABLED=True`. It places one limit order, requires the
 `Submitted` callback, cancels it, requires the `Canceled` callback, and confirms
 the final state through `query_orders`. On failure it queries by the unique test
 client ID and attempts to cancel any remaining open order. It does not modify

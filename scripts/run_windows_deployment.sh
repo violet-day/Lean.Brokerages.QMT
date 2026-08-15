@@ -5,33 +5,10 @@ set -euo pipefail
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
-trading_account_id="${QMT_TRADING_ACCOUNT_ID:-}"
-trading_symbol="${QMT_TRADING_SYMBOL:-600000.SH}"
-trading_quantity="${QMT_TRADING_QUANTITY:-100}"
-trading_limit_price="${QMT_TRADING_LIMIT_PRICE:-}"
 
 if [[ "$action" != "install" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
     echo "usage: $0 {install|test-smoke|test-trading}" >&2
     exit 2
-fi
-
-if [[ "$action" == "test-trading" ]]; then
-    if [[ ! "$trading_account_id" =~ ^[0-9]+$ ]]; then
-        echo "QMT_TRADING_ACCOUNT_ID must be the expected numeric simulation account ID." >&2
-        exit 2
-    fi
-    if [[ ! "$trading_symbol" =~ ^[0-9]{6}\.(SH|SZ|BJ)$ ]]; then
-        echo "QMT_TRADING_SYMBOL must use the format 600000.SH, 000001.SZ, or 430001.BJ." >&2
-        exit 2
-    fi
-    if [[ ! "$trading_quantity" =~ ^[1-9][0-9]*$ ]]; then
-        echo "QMT_TRADING_QUANTITY must be a positive whole number." >&2
-        exit 2
-    fi
-    if [[ ! "$trading_limit_price" =~ ^[0-9]+([.][0-9]+)?$ ]] || [[ "$trading_limit_price" == "0" ]]; then
-        echo "QMT_TRADING_LIMIT_PRICE must be a positive decimal number." >&2
-        exit 2
-    fi
 fi
 
 echo "[qmt-deploy] host=mac stage=sync status=start action=$action"
@@ -50,7 +27,7 @@ case "$action" in
         ;;
     test-trading)
         trading_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_trading.ps1'
-        remote_command="& '$trading_test_path' -ExpectedSimulationAccountId '$trading_account_id' -StockCode '$trading_symbol' -Quantity '$trading_quantity' -LimitPrice '$trading_limit_price'"
+        remote_command="& '$trading_test_path'"
         ;;
 esac
 

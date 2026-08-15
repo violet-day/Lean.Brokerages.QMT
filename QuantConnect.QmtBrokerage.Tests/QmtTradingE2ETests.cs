@@ -8,6 +8,8 @@ using System.Threading;
 using NUnit.Framework;
 using QuantConnect.Algorithm;
 using QuantConnect.Configuration;
+using QuantConnect.Data;
+using QuantConnect.Data.Market;
 using QuantConnect.Orders;
 using QuantConnect.Securities;
 
@@ -18,6 +20,9 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     public class QmtTradingE2ETests
     {
         private static readonly object EvidenceLogLock = new object();
+        private const string TradingStockCode = "600000.SH";
+        private const int TradingQuantity = 100;
+        private const decimal AutomaticLimitPriceMultiplier = 0.95m;
         private readonly QmtSymbolMapper _symbolMapper = new QmtSymbolMapper();
         private TradingOrderProvider _orderProvider = null!;
         private QmtGatewayClient _gatewayClient = null!;
@@ -89,28 +94,21 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         [Timeout(180000)]
         public void PlacesAndCancelsLimitOrder()
         {
-            var stockCode = RequiredEnvironmentVariable("QMT_TRADING_E2E_STOCK_CODE").ToUpperInvariant();
-            var quantityText = RequiredEnvironmentVariable("QMT_TRADING_E2E_QUANTITY");
-            var limitPriceText = RequiredEnvironmentVariable("QMT_TRADING_E2E_LIMIT_PRICE");
-            Assert.That(
-                int.TryParse(quantityText, NumberStyles.None, CultureInfo.InvariantCulture, out var quantity),
-                Is.True);
-            Assert.That(quantity, Is.GreaterThan(0));
-            Assert.That(
-                decimal.TryParse(limitPriceText, NumberStyles.Number, CultureInfo.InvariantCulture, out var limitPrice),
-                Is.True);
-            Assert.That(limitPrice, Is.GreaterThan(0m));
-
             var symbol = _symbolMapper.GetLeanSymbol(
-                stockCode,
+                TradingStockCode,
                 SecurityType.Equity,
                 QmtSymbolMapper.MarketName);
+            WriteEvidence(
+                "run",
+                "start",
+                $"stock_code={TradingStockCode} quantity={TradingQuantity} limit_price=automatic");
+            var limitPrice = GetLimitPriceFromLatestQuote(symbol);
             var algorithm = new QCAlgorithm();
             var submitOrderRequest = new SubmitOrderRequest(
                 OrderType.Limit,
                 SecurityType.Equity,
                 symbol,
-                quantity,
+                TradingQuantity,
                 0m,
                 limitPrice,
                 DateTime.UtcNow,
@@ -140,16 +138,12 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             _brokerage.OrdersStatusChanged += orderStatusHandler;
 
             var currentStage = "place-order";
-            WriteEvidence(
-                "run",
-                "start",
-                $"stock_code={stockCode} quantity={quantity} limit_price={limitPrice.ToString(CultureInfo.InvariantCulture)}");
             try
             {
                 WriteEvidence(
                     currentStage,
                     "start",
-                    $"lean_order_id={order.Id} stock_code={stockCode} quantity={quantity} " +
+                    $"lean_order_id={order.Id} stock_code={TradingStockCode} quantity={TradingQuantity} " +
                     $"limit_price={limitPrice.ToString(CultureInfo.InvariantCulture)}");
                 Assert.That(_brokerage.PlaceOrder(order), Is.True, "QMT rejected the test limit order request.");
                 Assert.That(
@@ -228,6 +222,57 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 TryCancelRemainingTestOrder(order);
                 _brokerage.OrderIdChanged -= orderIdChangedHandler;
                 _brokerage.OrdersStatusChanged -= orderStatusHandler;
+            }
+        }
+
+        private decimal GetLimitPriceFromLatestQuote(Symbol symbol)
+        {
+            const string stage = "latest-quote";
+            WriteEvidence(stage, "start", $"stock_code={TradingStockCode}");
+            var subscriptionConfiguration = new SubscriptionDataConfig(
+                typeof(Tick),
+                symbol,
+                Resolution.Tick,
+                TimeZones.Shanghai,
+                TimeZones.Shanghai,
+                false,
+                false,
+                false,
+                false,
+                TickType.Trade);
+            using var dataAvailable = new ManualResetEventSlim(false);
+            try
+            {
+                using var enumerator = _brokerage.Subscribe(
+                    subscriptionConfiguration,
+                    (_, _) => dataAvailable.Set());
+                Assert.That(enumerator, Is.Not.Null, "QMT did not create a quote subscription.");
+                Assert.That(
+                    dataAvailable.Wait(TimeSpan.FromSeconds(30)),
+                    Is.True,
+                    "QMT did not publish a latest quote within 30 seconds.");
+                Assert.That(enumerator!.MoveNext(), Is.True, "The QMT quote subscription returned no data.");
+                Assert.That(enumerator.Current, Is.TypeOf<Tick>());
+                var latestPrice = enumerator.Current.Value;
+                Assert.That(latestPrice, Is.GreaterThan(0m));
+                var limitPrice = Math.Floor(latestPrice * AutomaticLimitPriceMultiplier * 100m) / 100m;
+                Assert.That(limitPrice, Is.GreaterThan(0m));
+                WriteEvidence(
+                    stage,
+                    "ok",
+                    $"latest_price={latestPrice.ToString(CultureInfo.InvariantCulture)} " +
+                    $"limit_price={limitPrice.ToString(CultureInfo.InvariantCulture)} " +
+                    $"multiplier={AutomaticLimitPriceMultiplier}");
+                return limitPrice;
+            }
+            catch (Exception exception)
+            {
+                WriteFailure(stage, exception);
+                throw;
+            }
+            finally
+            {
+                _brokerage.Unsubscribe(subscriptionConfiguration);
             }
         }
 

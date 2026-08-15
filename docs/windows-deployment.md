@@ -140,13 +140,14 @@ make sync-windows    # 仅通过 Git 同步已提交分支
 make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
 make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
-make test-trading TRADING_ACCOUNT_ID=<模拟账号> TRADING_LIMIT_PRICE=<限价>
+make test-trading
 ```
 
-`make test-trading` 只允许人工明确指定的模拟账号。运行前需要手工将 Windows
+`make test-trading` 只允许 Windows `lean-qmt.json` 中固定的模拟账号 `86033767`，
+并用 Gateway `hello` 返回值二次核对当前 QMT 登录账号。运行前需要手工将
 `lean-qmt.json` 的 `qmt-trading-enabled` 和 Gateway 的 `TRADING_ENABLED` 同时设为
-`true`。命令本身不会修改开关。默认标的是 `600000.SH`、数量是 `100`，可通过
-`TRADING_SYMBOL`、`TRADING_QUANTITY` 覆盖。测试验证限价单提交、`Submitted`
+`true`，命令本身不会修改开关。测试固定使用 `600000.SH`、数量 `100`，根据最新行情
+自动计算不易成交的买入限价。测试验证限价单提交、`Submitted`
 回调、撤单、`Canceled` 回调及最终订单查询；失败时按唯一 client ID 尝试撤销
 遗留委托。日志为：
 
