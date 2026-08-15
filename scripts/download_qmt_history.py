@@ -208,7 +208,7 @@ def write_quantconnect_minute_zip(
                 raise zipfile.BadZipFile(
                     "generated QMT history ZIP has an invalid entry"
                 )
-        with temporary_zip_path.open("rb") as temporary_zip_file:
+        with temporary_zip_path.open("rb+") as temporary_zip_file:
             os.fsync(temporary_zip_file.fileno())
         os.replace(temporary_zip_path, target_zip_path)
     finally:
