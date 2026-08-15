@@ -1,20 +1,70 @@
 import importlib
+import io
 import json
 import os
 import socket
+import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stdout
 
 os.environ["QMT_GATEWAY_RUNTIME_LOG_PATH"] = os.devnull
 
-from qmt_python import lean_qmt_gateway
+with redirect_stdout(io.StringIO()):
+    from qmt_python import lean_qmt_gateway
 
 
 class NativeRow:
     def __init__(self, **fields):
         for field_name, field_value in fields.items():
             setattr(self, field_name, field_value)
+
+
+class RuntimeLogTests(unittest.TestCase):
+    def test_runtime_log_is_timestamped_and_rotated(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            original_runtime_log_path = lean_qmt_gateway.RUNTIME_LOG_PATH
+            try:
+                runtime_log_path = os.path.join(
+                    temporary_directory,
+                    "qmt-gateway-runtime.log",
+                )
+                lean_qmt_gateway._runtime_logger = (
+                    lean_qmt_gateway._configure_runtime_logger(
+                        runtime_log_path,
+                        maximum_runtime_log_bytes=160,
+                        runtime_log_backup_count=2,
+                    )
+                )
+
+                with redirect_stdout(io.StringIO()):
+                    for sequence_number in range(8):
+                        lean_qmt_gateway._log(
+                            "rotation_test",
+                            sequence=sequence_number,
+                            value="x" * 80,
+                        )
+
+                self.assertTrue(os.path.isfile(runtime_log_path))
+                self.assertTrue(os.path.isfile(runtime_log_path + ".1"))
+                self.assertTrue(os.path.isfile(runtime_log_path + ".2"))
+                self.assertFalse(os.path.exists(runtime_log_path + ".3"))
+                with open(runtime_log_path, "rb") as runtime_log_file:
+                    current_log_line = runtime_log_file.read().decode("utf-8")
+                self.assertRegex(
+                    current_log_line,
+                    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} ",
+                )
+                self.assertIn("sequence=7", current_log_line)
+            finally:
+                lean_qmt_gateway._runtime_logger = (
+                    lean_qmt_gateway._configure_runtime_logger(
+                        original_runtime_log_path,
+                        lean_qmt_gateway.MAXIMUM_RUNTIME_LOG_BYTES,
+                        lean_qmt_gateway.RUNTIME_LOG_BACKUP_COUNT,
+                    )
+                )
 
 
 class FakeContextInfo:
@@ -92,6 +142,8 @@ def request_message(request_id, operation, payload=None):
 
 class QmtGatewayTests(unittest.TestCase):
     def setUp(self):
+        self.gateway_output_redirect = redirect_stdout(io.StringIO())
+        self.gateway_output_redirect.__enter__()
         self.gateway_module = importlib.reload(lean_qmt_gateway)
         self.context_info = FakeContextInfo()
         self.query_thread_identifiers = []
@@ -155,7 +207,10 @@ class QmtGatewayTests(unittest.TestCase):
         )
 
     def tearDown(self):
-        self.gateway.stop()
+        try:
+            self.gateway.stop()
+        finally:
+            self.gateway_output_redirect.__exit__(None, None, None)
 
     def process_request(self, operation, payload=None, request_id="request-1"):
         response = self.gateway._process_request(

@@ -7,6 +7,7 @@ threads.
 """
 
 import json
+import logging
 import math
 import os
 import queue
@@ -14,6 +15,7 @@ import socket
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 
 
 module_directory = globals().get(
@@ -37,6 +39,8 @@ RUNTIME_LOG_PATH = os.environ.get(
         "qmt-gateway-runtime.log",
     ),
 )
+MAXIMUM_RUNTIME_LOG_BYTES = 5 * 1024 * 1024
+RUNTIME_LOG_BACKUP_COUNT = 3
 MAXIMUM_MESSAGE_BYTES = 1024 * 1024
 MAXIMUM_REQUESTS_PER_HANDLEBAR = 100
 MAXIMUM_CACHED_RESPONSES = 512
@@ -63,20 +67,71 @@ def _load_source(module_name, source_path):
     return module
 
 
+def _configure_runtime_logger(
+    runtime_log_path,
+    maximum_runtime_log_bytes,
+    runtime_log_backup_count,
+):
+    runtime_log_directory = os.path.dirname(runtime_log_path)
+    if runtime_log_directory and not os.path.isdir(runtime_log_directory):
+        os.makedirs(runtime_log_directory)
+
+    runtime_logger = logging.getLogger("lean_qmt_gateway.runtime")
+    runtime_logger.setLevel(logging.INFO)
+    runtime_logger.propagate = False
+    absolute_runtime_log_path = os.path.abspath(runtime_log_path)
+    for existing_handler in list(runtime_logger.handlers):
+        if not getattr(existing_handler, "is_lean_qmt_gateway_handler", False):
+            continue
+        if (
+            existing_handler.baseFilename == absolute_runtime_log_path
+            and existing_handler.maxBytes == maximum_runtime_log_bytes
+            and existing_handler.backupCount == runtime_log_backup_count
+        ):
+            return runtime_logger
+        runtime_logger.removeHandler(existing_handler)
+        existing_handler.close()
+
+    runtime_log_handler = RotatingFileHandler(
+        runtime_log_path,
+        maxBytes=maximum_runtime_log_bytes,
+        backupCount=runtime_log_backup_count,
+        encoding="utf-8",
+        delay=True,
+    )
+    runtime_log_handler.is_lean_qmt_gateway_handler = True
+    runtime_log_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s " + LOG_PREFIX + " %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    runtime_logger.addHandler(runtime_log_handler)
+    return runtime_logger
+
+
+try:
+    _runtime_logger = _configure_runtime_logger(
+        RUNTIME_LOG_PATH,
+        MAXIMUM_RUNTIME_LOG_BYTES,
+        RUNTIME_LOG_BACKUP_COUNT,
+    )
+except Exception as runtime_log_configuration_error:
+    _runtime_logger = None
+    print(
+        "%s runtime_log_unavailable error=%r path=%s"
+        % (LOG_PREFIX, runtime_log_configuration_error, RUNTIME_LOG_PATH)
+    )
+
+
 def _log(message, **fields):
-    parts = [LOG_PREFIX, str(message)]
+    parts = [str(message)]
     for field_name in sorted(fields):
         parts.append("%s=%s" % (field_name, fields[field_name]))
-    log_line = " ".join(parts)
-    try:
-        runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH)
-        if runtime_log_directory and not os.path.isdir(runtime_log_directory):
-            os.makedirs(runtime_log_directory)
-        with open(RUNTIME_LOG_PATH, "ab") as runtime_log_file:
-            runtime_log_file.write((log_line + "\n").encode("utf-8", "replace"))
-    except Exception:
-        pass
-    print(log_line)
+    log_message = " ".join(parts)
+    if _runtime_logger is not None:
+        _runtime_logger.info(log_message)
+    print(LOG_PREFIX + " " + log_message)
 
 
 _log(
