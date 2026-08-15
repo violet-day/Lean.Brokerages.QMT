@@ -3,7 +3,7 @@ param(
     [ValidateSet("Start", "Stop", "Status")]
     [string]$Action,
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
-    [string]$LogLinkRootPath = "C:\Users\nemo\lean_logs",
+    [string]$LogRootPath = "C:\Users\nemo\lean_logs",
     [string]$SmokeTestLivePath = "C:\Users\nemo\lean_project\china_smoke_test\live",
     [string]$BrokerLogPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT\.test-logs",
     [string]$TopGainerLivePath = "C:\Users\nemo\lean_project\a top gainer\live",
@@ -33,26 +33,54 @@ function Test-ContainerExists {
     return $matchingContainerNames -contains $ContainerName
 }
 
-function Set-DirectorySymbolicLink {
+function Set-CanonicalLogDirectory {
     param(
-        [string]$LinkPath,
-        [string]$TargetPath
+        [string]$SourcePath,
+        [string]$CanonicalPath
     )
 
-    New-Item -ItemType Directory -Path $TargetPath -Force | Out-Null
-    $existingLink = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
-    if ($existingLink) {
-        if ($existingLink.LinkType -ne "SymbolicLink") {
-            throw "The log link path exists and is not a symbolic link: $LinkPath"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $SourcePath) -Force | Out-Null
+    $sourceItem = Get-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+    $canonicalItem = Get-Item -LiteralPath $CanonicalPath -Force -ErrorAction SilentlyContinue
+
+    if ($sourceItem -and $sourceItem.LinkType -eq "SymbolicLink") {
+        if (-not [string]::Equals([string]$sourceItem.Target, $CanonicalPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The project log link points to '$($sourceItem.Target)' instead of '$CanonicalPath': $SourcePath"
         }
-        if (-not [string]::Equals([string]$existingLink.Target, $TargetPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "The log link points to '$($existingLink.Target)' instead of '$TargetPath': $LinkPath"
+        if (-not $canonicalItem -or -not $canonicalItem.PSIsContainer -or $canonicalItem.LinkType) {
+            throw "The canonical log directory is missing or is not a physical directory: $CanonicalPath"
         }
         return
     }
 
-    New-Item -ItemType SymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null
-    Write-LiveLogServerLog "stage=link status=created link=$LinkPath target=$TargetPath"
+    if ($canonicalItem -and $canonicalItem.LinkType -eq "SymbolicLink") {
+        if (-not [string]::Equals([string]$canonicalItem.Target, $SourcePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The legacy log link points to '$($canonicalItem.Target)' instead of '$SourcePath': $CanonicalPath"
+        }
+        & cmd.exe /d /c "rmdir `"$CanonicalPath`""
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not remove the legacy log link: $CanonicalPath"
+        }
+        $canonicalItem = $null
+    }
+
+    if ($canonicalItem) {
+        throw "The canonical log path already exists while the project path is not linked: $CanonicalPath"
+    }
+
+    if ($sourceItem) {
+        if (-not $sourceItem.PSIsContainer -or $sourceItem.LinkType) {
+            throw "The project log path is not a physical directory: $SourcePath"
+        }
+        Move-Item -LiteralPath $SourcePath -Destination $CanonicalPath
+        Write-LiveLogServerLog "stage=migrate status=ok source=$SourcePath destination=$CanonicalPath"
+    }
+    else {
+        New-Item -ItemType Directory -Path $CanonicalPath -Force | Out-Null
+    }
+
+    New-Item -ItemType SymbolicLink -Path $SourcePath -Target $CanonicalPath | Out-Null
+    Write-LiveLogServerLog "stage=link status=created link=$SourcePath target=$CanonicalPath"
 }
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
@@ -88,16 +116,16 @@ if (-not (Test-Path -LiteralPath $nginxConfigurationPath)) {
     throw "The Nginx configuration is missing: $nginxConfigurationPath"
 }
 
-New-Item -ItemType Directory -Path $LogLinkRootPath -Force | Out-Null
+New-Item -ItemType Directory -Path $LogRootPath -Force | Out-Null
 $logSources = @(
     @{ Name = "smoke_test"; Path = $SmokeTestLivePath },
     @{ Name = "broker"; Path = $BrokerLogPath },
     @{ Name = "a-top-gainer"; Path = $TopGainerLivePath }
 )
 foreach ($logSource in $logSources) {
-    Set-DirectorySymbolicLink `
-        -LinkPath (Join-Path $LogLinkRootPath $logSource.Name) `
-        -TargetPath $logSource.Path
+    Set-CanonicalLogDirectory `
+        -SourcePath $logSource.Path `
+        -CanonicalPath (Join-Path $LogRootPath $logSource.Name)
 }
 
 if (Test-ContainerExists) {
@@ -144,7 +172,7 @@ $dockerArguments = @(
     "--name", $ContainerName,
     "--restart", "unless-stopped",
     "--publish", "${Port}:80",
-    "--mount", "type=bind,source=$LogLinkRootPath,target=/usr/share/nginx/html,readonly",
+    "--mount", "type=bind,source=$LogRootPath,target=/usr/share/nginx/html,readonly",
     "--mount", "type=bind,source=$nginxConfigurationPath,target=/etc/nginx/conf.d/default.conf,readonly"
 )
 $dockerArguments += $NginxImage
@@ -173,4 +201,4 @@ foreach ($verificationPath in $verificationPaths) {
     }
 }
 
-Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage links=$LogLinkRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
+Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage root=$LogRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"

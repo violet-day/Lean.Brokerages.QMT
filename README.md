@@ -145,9 +145,10 @@ http://192.168.50.135:8000/broker/
 http://192.168.50.135:8000/a-top-gainer/
 ```
 
-The matching Windows symbolic links live under
-`C:\Users\nemo\lean_logs`. `make serve-live-logs` creates missing target
-directories and starts or replaces the Nginx container.
+The physical log directories live under `C:\Users\nemo\lean_logs`. The
+project `live`/`.test-logs` paths are symbolic links into that root. Nginx
+mounts only the root directory. `make serve-live-logs` performs the one-time
+migration and starts or replaces the Nginx container.
 
 ## One-time QMT Gateway setup
 
