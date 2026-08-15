@@ -172,6 +172,22 @@ they are not copied to macOS. Native Windows Nginx serves only the unified root
 directory on port 8000 and runs as the `QmtLiveLogs` startup task. Log access is
 independent of Docker Desktop, WSL, and LEAN containers.
 
+## Download QMT minute history
+
+Download one ticker and trading date through the running QMT Gateway:
+
+```bash
+uv run --locked python scripts/download_qmt_history.py \
+  --ticker 600000.SH \
+  --date 20260814
+```
+
+The script writes the LEAN/QC minute ZIP to
+`data/equity/china/minute/600000/20260814_trade.zip`. On Windows the default
+data root is `C:\Users\nemo\lean_project\data`; on macOS it is
+`~/Workspace/quant/lean-project/data`. Use `--host 192.168.50.135` when calling
+the Windows Gateway from macOS, or `--data-root` to override the destination.
+
 ## One-time QMT Gateway setup
 
 QMT must be logged in and the Gateway strategy must be started manually. The
