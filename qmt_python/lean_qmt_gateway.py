@@ -46,6 +46,8 @@ REQUEST_PUMP_CALLBACK_NAME = "qmt_gateway_timer_callback"
 REQUEST_PUMP_PERIOD = "500nMilliSecond"
 REQUEST_PUMP_START_TIME = "2000-01-01 00:00:00"
 REQUEST_PUMP_MARKET = "SH"
+NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS = 5.0
+NETWORK_RECOVERY_RETRY_SECONDS = 5.0
 _runtime_log_lock = threading.Lock()
 
 
@@ -605,6 +607,8 @@ class LeanQmtGateway(object):
         self._server_socket = None
         self._accept_thread = None
         self._sender_thread = None
+        self._accept_loop_last_active_at = 0.0
+        self._next_network_recovery_at = 0.0
         self._client_sockets = []
         self._client_threads = []
         self._client_lock = threading.Lock()
@@ -615,20 +619,43 @@ class LeanQmtGateway(object):
 
     @property
     def is_running(self):
-        return self._accept_thread is not None and self._accept_thread.is_alive()
+        accept_thread_is_alive = (
+            self._accept_thread is not None
+            and self._accept_thread.is_alive()
+        )
+        sender_thread_is_alive = (
+            self._sender_thread is not None
+            and self._sender_thread.is_alive()
+        )
+        accept_loop_is_active = (
+            self._accept_loop_last_active_at > 0
+            and time.monotonic() - self._accept_loop_last_active_at
+            <= NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS
+        )
+        return (
+            self._server_socket is not None
+            and accept_thread_is_alive
+            and sender_thread_is_alive
+            and accept_loop_is_active
+        )
 
     def start(self):
         if self.is_running:
             return
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((self.bind_host, self.bind_port))
-        server_socket.listen(5)
-        server_socket.settimeout(0.25)
+        try:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind((self.bind_host, self.bind_port))
+            server_socket.listen(5)
+            server_socket.settimeout(0.25)
+        except Exception:
+            server_socket.close()
+            raise
         self._server_socket = server_socket
         self.bound_port = server_socket.getsockname()[1]
         self._stop_event.clear()
+        self._accept_loop_last_active_at = time.monotonic()
 
         self._accept_thread = threading.Thread(
             target=self._accept_connections,
@@ -650,6 +677,40 @@ class LeanQmtGateway(object):
             trading_enabled=self.trading_enabled,
         )
 
+    def recover_network_server_if_needed(self):
+        if self.is_running:
+            self._next_network_recovery_at = 0.0
+            return True
+
+        current_time = time.monotonic()
+        if current_time < self._next_network_recovery_at:
+            return False
+        self._next_network_recovery_at = (
+            current_time + NETWORK_RECOVERY_RETRY_SECONDS
+        )
+
+        _log(
+            "server_recovery_start",
+            accept_thread_alive=(
+                self._accept_thread is not None
+                and self._accept_thread.is_alive()
+            ),
+            sender_thread_alive=(
+                self._sender_thread is not None
+                and self._sender_thread.is_alive()
+            ),
+        )
+        self._stop_network_server()
+        try:
+            self.start()
+        except Exception as error:
+            _log("server_recovery_failed", error=repr(error))
+            return False
+
+        self._next_network_recovery_at = 0.0
+        _log("server_recovery_ok", bind_port=self.bound_port)
+        return True
+
     def stop(self):
         for protocol_subscription_id in list(
             self._subscriptions_by_protocol_id.keys()
@@ -664,6 +725,11 @@ class LeanQmtGateway(object):
                 )
 
         was_started = self._accept_thread is not None or self._server_socket is not None
+        self._stop_network_server()
+        if was_started:
+            _log("server_stopped")
+
+    def _stop_network_server(self):
         self._stop_event.set()
         server_socket = self._server_socket
         self._server_socket = None
@@ -680,15 +746,23 @@ class LeanQmtGateway(object):
             self._close_socket(client_socket)
 
         self._outgoing_messages.put((None, None))
-        for network_thread in (self._accept_thread, self._sender_thread):
+        network_threads = [self._accept_thread, self._sender_thread]
+        network_threads.extend(self._client_threads)
+        for network_thread in network_threads:
             if network_thread is not None and network_thread.is_alive():
                 network_thread.join(1.0)
         self._accept_thread = None
         self._sender_thread = None
-        if was_started:
-            _log("server_stopped")
+        self._client_threads = []
+        self._accept_loop_last_active_at = 0.0
+        self.bound_port = None
+        self._incoming_messages = queue.Queue()
+        self._outgoing_messages = queue.Queue()
 
     def handlebar(self):
+        if not self.recover_network_server_if_needed():
+            return
+
         processed_request_count = 0
         while processed_request_count < MAXIMUM_REQUESTS_PER_HANDLEBAR:
             try:
@@ -762,6 +836,7 @@ class LeanQmtGateway(object):
 
     def _accept_connections(self):
         while not self._stop_event.is_set():
+            self._accept_loop_last_active_at = time.monotonic()
             server_socket = self._server_socket
             if server_socket is None:
                 break
