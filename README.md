@@ -137,6 +137,18 @@ make package-windows
 make test-live
 ```
 
+Windows live logs are served read-only through Nginx on the LAN:
+
+```text
+http://192.168.50.135:8000/smoke_test/
+http://192.168.50.135:8000/broker/
+http://192.168.50.135:8000/a-top-gainer/
+```
+
+The matching Windows symbolic links live under
+`C:\Users\nemo\lean_logs`. `make serve-live-logs` creates missing target
+directories and starts or replaces the Nginx container.
+
 ## One-time QMT Gateway setup
 
 QMT must be logged in and the Gateway strategy must be started manually. The

@@ -3,7 +3,10 @@ param(
     [ValidateSet("Start", "Stop", "Status")]
     [string]$Action,
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
-    [string]$LiveRootPath = "C:\Users\nemo\lean_project\china_smoke_test\live",
+    [string]$LogLinkRootPath = "C:\Users\nemo\lean_logs",
+    [string]$SmokeTestLivePath = "C:\Users\nemo\lean_project\china_smoke_test\live",
+    [string]$BrokerLogPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT\.test-logs",
+    [string]$TopGainerLivePath = "C:\Users\nemo\lean_project\a top gainer\live",
     [string]$ContainerName = "qmt-live-logs",
     [string]$NginxImage = "nginx:alpine",
     [string]$AllowedRemoteAddress = "192.168.50.0/24",
@@ -28,6 +31,28 @@ function Test-ContainerExists {
         throw "Could not query Docker containers."
     }
     return $matchingContainerNames -contains $ContainerName
+}
+
+function Set-DirectorySymbolicLink {
+    param(
+        [string]$LinkPath,
+        [string]$TargetPath
+    )
+
+    New-Item -ItemType Directory -Path $TargetPath -Force | Out-Null
+    $existingLink = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
+    if ($existingLink) {
+        if ($existingLink.LinkType -ne "SymbolicLink") {
+            throw "The log link path exists and is not a symbolic link: $LinkPath"
+        }
+        if (-not [string]::Equals([string]$existingLink.Target, $TargetPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The log link points to '$($existingLink.Target)' instead of '$TargetPath': $LinkPath"
+        }
+        return
+    }
+
+    New-Item -ItemType SymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null
+    Write-LiveLogServerLog "stage=link status=created link=$LinkPath target=$TargetPath"
 }
 
 & $dockerExecutable version --format "{{.Server.Os}}/{{.Server.Arch}}" | Out-Null
@@ -62,7 +87,18 @@ if ($Action -eq "Stop") {
 if (-not (Test-Path -LiteralPath $nginxConfigurationPath)) {
     throw "The Nginx configuration is missing: $nginxConfigurationPath"
 }
-New-Item -ItemType Directory -Path $LiveRootPath -Force | Out-Null
+
+New-Item -ItemType Directory -Path $LogLinkRootPath -Force | Out-Null
+$logSources = @(
+    @{ Name = "smoke_test"; Path = $SmokeTestLivePath },
+    @{ Name = "broker"; Path = $BrokerLogPath },
+    @{ Name = "a-top-gainer"; Path = $TopGainerLivePath }
+)
+foreach ($logSource in $logSources) {
+    Set-DirectorySymbolicLink `
+        -LinkPath (Join-Path $LogLinkRootPath $logSource.Name) `
+        -TargetPath $logSource.Path
+}
 
 if (Test-ContainerExists) {
     & $dockerExecutable rm --force $ContainerName | Out-Null
@@ -108,30 +144,33 @@ $dockerArguments = @(
     "--name", $ContainerName,
     "--restart", "unless-stopped",
     "--publish", "${Port}:80",
-    "--mount", "type=bind,source=$LiveRootPath,target=/usr/share/nginx/html,readonly",
-    "--mount", "type=bind,source=$nginxConfigurationPath,target=/etc/nginx/conf.d/default.conf,readonly",
-    $NginxImage
+    "--mount", "type=bind,source=$LogLinkRootPath,target=/usr/share/nginx/html,readonly",
+    "--mount", "type=bind,source=$nginxConfigurationPath,target=/etc/nginx/conf.d/default.conf,readonly"
 )
+$dockerArguments += $NginxImage
 $containerId = & $dockerExecutable @dockerArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Could not start the Nginx live log container."
 }
 Write-LiveLogServerLog "stage=container status=started container=$ContainerName id=$containerId"
 
-$verificationDeadline = (Get-Date).AddSeconds(15)
-$httpStatusCode = 0
-while ($httpStatusCode -ne 200 -and (Get-Date) -lt $verificationDeadline) {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2
-        $httpStatusCode = [int]$response.StatusCode
+$verificationPaths = @("", "smoke_test/", "broker/", "a-top-gainer/")
+foreach ($verificationPath in $verificationPaths) {
+    $verificationDeadline = (Get-Date).AddSeconds(15)
+    $httpStatusCode = 0
+    while ($httpStatusCode -ne 200 -and (Get-Date) -lt $verificationDeadline) {
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/$verificationPath" -TimeoutSec 2
+            $httpStatusCode = [int]$response.StatusCode
+        }
+        catch {
+            Start-Sleep -Milliseconds 250
+        }
     }
-    catch {
-        Start-Sleep -Milliseconds 250
+    if ($httpStatusCode -ne 200) {
+        & $dockerExecutable logs $ContainerName 2>&1 | ForEach-Object { Write-LiveLogServerLog "nginx=$_" }
+        throw "Nginx did not serve '/$verificationPath' on Windows port $Port."
     }
-}
-if ($httpStatusCode -ne 200) {
-    & $dockerExecutable logs $ContainerName 2>&1 | ForEach-Object { Write-LiveLogServerLog "nginx=$_" }
-    throw "Nginx did not become ready on Windows port $Port."
 }
 
-Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage source=$LiveRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
+Write-LiveLogServerLog "stage=start status=ok container=$ContainerName image=$NginxImage links=$LogLinkRootPath remote_address=$AllowedRemoteAddress url=http://192.168.50.135:$Port/"
