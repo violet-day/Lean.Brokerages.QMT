@@ -24,8 +24,9 @@ New-Item -ItemType Directory -Path $userLogDirectory -Force | Out-Null
 function Write-E2EEvidence {
     param([string]$Message)
 
-    [System.IO.File]::AppendAllText($userLogPath, $Message + "`r`n", $utf8Encoding)
-    [Console]::Error.WriteLine($Message)
+    $line = "$(Get-Date -Format o) $Message"
+    [System.IO.File]::AppendAllText($userLogPath, $line + "`r`n", $utf8Encoding)
+    [Console]::Error.WriteLine($line)
 }
 
 function Invoke-CapturedCommand {
@@ -60,7 +61,10 @@ function Invoke-CapturedCommand {
     }
 }
 
+$currentStage = "preflight"
+Write-E2EEvidence "[qmt-e2e] stage=run status=start trading=disabled"
 try {
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
         throw "The QMT LEAN configuration is missing: $LeanConfigurationPath"
     }
@@ -79,6 +83,8 @@ try {
     }
     Write-E2EEvidence "[qmt-e2e] stage=preflight status=ok gateway_port=$GatewayPort trading=disabled"
 
+    $currentStage = "build"
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
     $dotnetExecutable = Join-Path $env:USERPROFILE ".dotnet\dotnet.exe"
     if (-not (Test-Path -LiteralPath $dotnetExecutable)) {
         throw ".NET SDK is missing: $dotnetExecutable"
@@ -100,10 +106,13 @@ try {
     }
     Write-E2EEvidence "[qmt-e2e] stage=build status=ok errors=0"
 
+    $currentStage = "brokerage-test"
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
     $env:QMT_E2E_ACCOUNT_ID = $accountId
     $env:QMT_E2E_GATEWAY_HOST = "127.0.0.1"
     $env:QMT_E2E_GATEWAY_PORT = [string]$GatewayPort
     $env:QMT_E2E_DATA_FOLDER = "C:\Users\nemo\lean\Lean\Data"
+    $env:QMT_E2E_LOG_PATH = $userLogPath
     $env:DOTNET_CLI_UI_LANGUAGE = "en-US"
     $testResult = Invoke-CapturedCommand $dotnetExecutable @(
         "test",
@@ -116,9 +125,6 @@ try {
         "--logger", "console;verbosity=normal"
     )
     [System.IO.File]::AppendAllText($privateLogPath, $testResult.Output, $utf8Encoding)
-    foreach ($evidenceLine in @($testResult.Output -split "`r?`n" | Where-Object { $_ -match "\[qmt-e2e\]" })) {
-        Write-E2EEvidence $evidenceLine.Trim()
-    }
     if ($testResult.ExitCode -ne 0) {
         $failureDetail = @($testResult.Output -split "`r?`n" | Where-Object {
             $_ -match "System\.[A-Za-z]+Exception|Expected:|But was:"
@@ -133,6 +139,8 @@ try {
     }
     Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=1"
 
+    $currentStage = "log-server-local"
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
     $logResponse = Invoke-WebRequest `
         -UseBasicParsing `
         -Uri "http://127.0.0.1:$LogServerPort/e2e/qmt-readonly-e2e.log" `
@@ -141,10 +149,12 @@ try {
         -not ([string]$logResponse.Headers."Content-Type").StartsWith("text/plain")) {
         throw "Windows Nginx did not expose the E2E evidence as plain text."
     }
-    Write-E2EEvidence "[qmt-e2e] stage=log-serving status=ok url=http://192.168.50.135:$LogServerPort/e2e/qmt-readonly-e2e.log"
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=ok local_url=http://127.0.0.1:$LogServerPort/e2e/qmt-readonly-e2e.log"
+    Write-E2EEvidence "[qmt-e2e] stage=run status=ok log=http://192.168.50.135:$LogServerPort/e2e/qmt-readonly-e2e.log"
 }
 catch {
-    Write-E2EEvidence "[qmt-e2e] stage=run status=failed reason=$($_.Exception.Message)"
+    $reason = $_.Exception.Message.Replace('"', "'").Replace("`r", " ").Replace("`n", " ")
+    Write-E2EEvidence "[qmt-e2e] stage=run status=failed failed_stage=$currentStage reason=`"$reason`""
     throw
 }
 finally {
@@ -152,5 +162,6 @@ finally {
     Remove-Item Env:QMT_E2E_GATEWAY_HOST -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_E2E_GATEWAY_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_E2E_DATA_FOLDER -ErrorAction SilentlyContinue
+    Remove-Item Env:QMT_E2E_LOG_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:DOTNET_CLI_UI_LANGUAGE -ErrorAction SilentlyContinue
 }

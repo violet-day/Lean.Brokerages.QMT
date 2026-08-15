@@ -100,6 +100,7 @@ LEAN PlaceOrder
 - [x] 将 order/deal callback 转成 LEAN `OrderEvent`。
 - [x] 本地与 Gateway 两个交易开关必须同时开启。
 - [x] 真实 QMT 只读 E2E 覆盖账户、持仓、委托、历史和行情订阅。
+- [x] 模拟账户交易 E2E 入口覆盖限价单提交、回调、撤单和最终订单查询。
 - [ ] 启动时自动完成资金、持仓和未完成委托对账。
 - [ ] 断线主动通知、人工恢复后的状态对账和事件去重。
 - [ ] 对 order/deal 重复或乱序回调增加持久化防护。
@@ -180,23 +181,11 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 ## 当前命令
 
 ```bash
-make test          # 同步后在 Windows 运行兼容性、编译和纯契约测试
-make test-windows  # 同 make test 的 Windows 工作流入口
-make package-windows # 同步、Windows 编译/测试并发布版本化本地 DLL
-make sync-windows  # 通过 Git 同步已提交分支，不测试、不操作 QMT
-make install-windows # 验证 lean-cli、恢复默认镜像并生成 lean-qmt.json
-make e2e-brokerage-readonly # 真实 QMT Brokerage 非交易 E2E
-make e2e-readonly   # Brokerage E2E + 完整 LEAN live smoke
-make test-live     # 默认镜像 + 本地 QMT DLL 的真实只读 E2E
-```
-
-仍计划增加：
-
-```bash
-make test-integration  # 真实 QMT 模拟账户集成测试（必须显式人工准备）
-make deploy-sim        # 模拟账户部署
-make health            # 只读 Gateway/LEAN 健康检查
-make stop              # 停止 LEAN 部署，不操作 QMT 客户端
+make sync-windows    # 仅通过 Git 同步已提交分支
+make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
+make test            # 同步、Windows 测试并发布版本化本地 DLL
+make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
+make test-trading TRADING_ACCOUNT_ID=<模拟账号> TRADING_LIMIT_PRICE=<限价>
 ```
 
 ## 当前阻塞与最短下一步

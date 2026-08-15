@@ -126,31 +126,29 @@ fast-forward the same branch on Windows without testing:
 make sync-windows
 ```
 
-To package the local Brokerage and run the real read-only deployment smoke
-test with the default `quantconnect/lean:latest` image:
+The repository exposes five Make targets. Install once, use `test` after
+Brokerage changes, and use `test-smoke` for real-QMT read-only validation:
 
 ```bash
+make sync-windows
 make install-windows
-make package-windows
-make e2e-brokerage-readonly
-make e2e-readonly
-make test-live
+make test
+make test-smoke
+make test-trading TRADING_ACCOUNT_ID=<simulation-account-id> TRADING_LIMIT_PRICE=<limit-price>
 ```
 
-`make e2e-brokerage-readonly` follows the Interactive Brokers integration-test
-pattern: NUnit constructs the real `QmtGatewayClient` and `QmtBrokerage`, then
-checks the account handshake, cash, holdings, open orders, daily/minute history,
-subscription lifecycle, and an explicit disconnect/connect cycle against the
-running QMT Gateway. Both trading switches must be false and the test never
-calls an order method. This does not claim automatic fault recovery.
-
-`make e2e-readonly` runs that Brokerage test first and then `make test-live`,
-which adds the complete `lean-cli -> Docker -> LEAN Engine -> QMT` path. During
-closed market hours the live tick stage is reported as skipped, not passed.
+`make test-smoke` first runs the real Brokerage NUnit test, which checks the
+account handshake, cash, holdings, open orders, daily/minute history,
+subscription lifecycle, and an explicit disconnect/connect cycle. It then runs
+the complete `lean-cli -> Docker -> LEAN Engine -> QMT` path. Both trading
+switches must be false, and no order method is called. During closed market
+hours the live tick stage is reported as skipped, not passed. This does not
+claim automatic fault recovery.
 The latest concise Brokerage evidence is served from Windows at:
 
 ```text
 http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log
+http://192.168.50.135:8000/e2e/test-smoke.log
 ```
 
 Windows live logs are served read-only through Nginx on the LAN:
@@ -167,9 +165,8 @@ The physical log directories live under `C:\Users\nemo\lean_logs`. Project
 to `lean_logs\broker\qmt-gateway-runtime.log`. The Python Gateway rotates that
 file at 5 MiB and keeps three backups. Build and deployment test logs remain
 private under the repository `.test-logs`. Windows serves its own logs directly;
-they are not copied to macOS. Nginx mounts only the unified root directory.
-`make serve-live-logs` performs the one-time migration and starts or replaces
-the Nginx container.
+they are not copied to macOS. Nginx mounts only the unified root directory and
+runs as persistent Windows infrastructure, not as a routine Make workflow.
 
 ## One-time QMT Gateway setup
 
@@ -227,3 +224,25 @@ If either is false, `PlaceOrder()` and `CancelOrder()` are blocked. Keep both
 false until real-QMT read-only validation and the simulated-account checklist
 in ROADMAP.md have passed. Enabling either setting is an operator decision and
 is never part of `make test`.
+
+The explicit simulation-account order/cancel test is:
+
+```bash
+make test-trading \
+  TRADING_ACCOUNT_ID=<simulation-account-id> \
+  TRADING_LIMIT_PRICE=<non-marketable-limit-price>
+```
+
+`TRADING_SYMBOL` defaults to `600000.SH` and `TRADING_QUANTITY` defaults to
+`100`. The command refuses to run unless the provided account matches the
+Windows `lean-qmt.json`, `qmt-trading-enabled=true`, and the running Gateway
+reports `TRADING_ENABLED=True`. It places one limit order, requires the
+`Submitted` callback, cancels it, requires the `Canceled` callback, and confirms
+the final state through `query_orders`. On failure it queries by the unique test
+client ID and attempts to cancel any remaining open order. It does not modify
+either trading switch and must never be pointed at a live account. Its concise
+Windows log is:
+
+```text
+http://192.168.50.135:8000/e2e/test-trading.log
+```

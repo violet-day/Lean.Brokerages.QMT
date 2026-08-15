@@ -4,6 +4,7 @@ param(
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ResearchImage = "quantconnect/research:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
+    [string]$LogRootPath = "C:\Users\nemo\lean_logs",
     [int]$GatewayPort = 17890
 )
 
@@ -13,17 +14,32 @@ $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
 $liveTestLogPath = Join-Path $RepositoryPath ".test-logs\windows-live-test.log"
+$smokeLogDirectory = Join-Path $LogRootPath "e2e"
+$smokeLogPath = Join-Path $smokeLogDirectory "test-smoke.log"
 New-Item -ItemType Directory -Path (Split-Path -Parent $liveTestLogPath) -Force | Out-Null
+New-Item -ItemType Directory -Path $smokeLogDirectory -Force | Out-Null
 [System.IO.File]::WriteAllText($liveTestLogPath, "", $utf8Encoding)
+[System.IO.File]::WriteAllText($smokeLogPath, "", $utf8Encoding)
 
 function Write-DeploymentLog {
     param([string]$Message)
 
-    $logLine = "[qmt-live-test] $Message"
+    $logLine = "$(Get-Date -Format o) [qmt-live-test] $Message"
     [System.IO.File]::AppendAllText($liveTestLogPath, $logLine + "`r`n", $utf8Encoding)
+    [System.IO.File]::AppendAllText($smokeLogPath, $logLine + "`r`n", $utf8Encoding)
     [Console]::Error.WriteLine($logLine)
 }
 
+$currentStage = "brokerage-readonly"
+Write-DeploymentLog "stage=run status=start trading_enabled=false"
+try {
+Write-DeploymentLog "stage=$currentStage status=start"
+$brokerageReadOnlyTestPath = Join-Path $RepositoryPath "scripts\test_windows_brokerage_e2e_readonly.ps1"
+& $brokerageReadOnlyTestPath
+Write-DeploymentLog "stage=$currentStage status=ok detail_log=http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log"
+
+$currentStage = "lean-preflight"
+Write-DeploymentLog "stage=$currentStage status=start"
 $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
 $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"
 $configurationPath = Join-Path $LeanProjectRoot "lean-qmt.json"
@@ -62,7 +78,7 @@ $leanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
 $moduleDirectory = Join-Path (Join-Path $ModuleRoot $leanVersion) $targetFramework
 $brokerageAssemblyPath = Join-Path $moduleDirectory "QuantConnect.Brokerages.Qmt.dll"
 if (-not (Test-Path -LiteralPath $brokerageAssemblyPath)) {
-    throw "The packaged QMT Brokerage assembly is missing: $brokerageAssemblyPath. Run make package-windows first."
+    throw "The packaged QMT Brokerage assembly is missing: $brokerageAssemblyPath. Run make test first."
 }
 Write-DeploymentLog "stage=brokerage-module status=ok image=$EngineImage lean_version=$leanVersion target_framework=$targetFramework path=$brokerageAssemblyPath"
 
@@ -87,6 +103,7 @@ if (-not $gatewayListener) {
     throw "The real QMT Gateway is not listening on Windows port $GatewayPort. Run the Gateway strategy manually in QMT first."
 }
 Write-DeploymentLog "stage=gateway status=ok port=$GatewayPort local_address=$($gatewayListener[0].LocalAddress)"
+Write-DeploymentLog "stage=$currentStage status=ok image=$EngineImage gateway_port=$GatewayPort"
 
 $brokerageVolume = @{}
 $brokerageVolume[$brokerageAssemblyPath] = @{
@@ -106,7 +123,8 @@ $leanArguments = @(
     "--no-update",
     "--extra-docker-config", $escapedExtraDockerConfiguration
 )
-Write-DeploymentLog "stage=lean-live status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
+$currentStage = "lean-cli-deploy"
+Write-DeploymentLog "stage=$currentStage status=start image=$EngineImage environment=live-qmt project=$liveProjectPath module=$brokerageAssemblyPath"
 $existingLeanContainers = @(& $dockerExecutable ps --filter "ancestor=$EngineImage" --format "{{.ID}}")
 if ($existingLeanContainers.Count -ne 0) {
     throw "A LEAN container is already running: $($existingLeanContainers -join ', ')."
@@ -142,7 +160,10 @@ try {
     if ($leanExitCode -ne 0) {
         throw "lean live deploy failed with exit code $leanExitCode."
     }
+    Write-DeploymentLog "stage=$currentStage status=ok"
 
+    $currentStage = "container-start"
+    Write-DeploymentLog "stage=$currentStage status=start"
     $containerDiscoveryDeadline = (Get-Date).AddSeconds(30)
     while (-not $containerId -and (Get-Date) -lt $containerDiscoveryDeadline) {
         $containerId = (& $dockerExecutable ps --filter "ancestor=$EngineImage" --format "{{.ID}}" | Select-Object -First 1)
@@ -153,7 +174,10 @@ try {
     if (-not $containerId) {
         throw "The detached LEAN live container did not start."
     }
+    Write-DeploymentLog "stage=$currentStage status=ok container_id=$containerId"
 
+    $currentStage = "lean-validation"
+    Write-DeploymentLog "stage=$currentStage status=start"
     $validationDeadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $validationDeadline) {
         $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
@@ -241,4 +265,11 @@ $outputUrl = if ($latestLiveOutputDirectory) {
 else {
     "http://192.168.50.135:8000/smoke_test/"
 }
-Write-DeploymentLog "stage=lean-live status=ok image=$EngineImage history=ok account=ok positions=ok orders=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_url=$outputUrl"
+Write-DeploymentLog "stage=$currentStage status=ok image=$EngineImage history=ok account=ok positions=ok orders=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_url=$outputUrl"
+Write-DeploymentLog "stage=run status=ok log=http://192.168.50.135:8000/e2e/test-smoke.log"
+}
+catch {
+    $reason = $_.Exception.Message.Replace('"', "'").Replace("`r", " ").Replace("`n", " ")
+    Write-DeploymentLog "stage=run status=failed failed_stage=$currentStage reason=`"$reason`""
+    throw
+}

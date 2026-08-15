@@ -52,7 +52,7 @@ QMT DLL 直接挂载到默认 Engine 容器，不构建自定义镜像，也不�
 许可条款。自动化不能代替用户接受条款。Docker daemon ready 后执行：
 
 ```bash
-make package-windows
+make test
 ```
 
 命令依次执行：
@@ -68,21 +68,18 @@ Git push/fetch/fast-forward
 ## 真实只读全链路验证
 
 ```bash
-make e2e-brokerage-readonly
-make e2e-readonly
-make test-live
+make test-smoke
 ```
 
-`make e2e-brokerage-readonly` 直接构造真实 `QmtGatewayClient` 和
-`QmtBrokerage`，验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、
-退订和主动断开后的连接重建。它不验证自动故障恢复，并要求 Gateway 与 LEAN
-两端交易开关均为关闭状态，不调用下单接口。
-
-`make e2e-readonly` 先运行 Brokerage E2E，再运行下面的完整 LEAN live smoke。
+`make test-smoke` 先直接构造真实 `QmtGatewayClient` 和 `QmtBrokerage`，
+验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、退订和主动断开后的
+连接重建；随后运行完整 LEAN live smoke。它不验证自动故障恢复，并要求 Gateway
+与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
 精简证据由 Windows Nginx 暴露：
 
 ```text
 http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log
+http://192.168.50.135:8000/e2e/test-smoke.log
 ```
 
 该命令要求用户已在大 QMT 中手工运行真实 Gateway，随后执行：
@@ -136,12 +133,22 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 ## 常规验证与日志
 
 ```bash
-make test             # Windows Python tests、.NET build、NUnit tests
-make install-windows  # 可重复执行，验证安装幂等性
-make package-windows  # Windows 编译、测试并发布版本化本地 DLL
-make e2e-brokerage-readonly # 真实 QMT Brokerage 非交易 E2E
-make e2e-readonly     # Brokerage E2E + 完整 LEAN live smoke
-make test-live        # 真实 QMT 只读完整部署 smoke
+make sync-windows    # 仅通过 Git 同步已提交分支
+make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
+make test            # 同步、Windows 测试并发布版本化本地 DLL
+make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
+make test-trading TRADING_ACCOUNT_ID=<模拟账号> TRADING_LIMIT_PRICE=<限价>
+```
+
+`make test-trading` 只允许人工明确指定的模拟账号。运行前需要手工将 Windows
+`lean-qmt.json` 的 `qmt-trading-enabled` 和 Gateway 的 `TRADING_ENABLED` 同时设为
+`true`。命令本身不会修改开关。默认标的是 `600000.SH`、数量是 `100`，可通过
+`TRADING_SYMBOL`、`TRADING_QUANTITY` 覆盖。测试验证限价单提交、`Submitted`
+回调、撤单、`Canceled` 回调及最终订单查询；失败时按唯一 client ID 尝试撤销
+遗留委托。日志为：
+
+```text
+http://192.168.50.135:8000/e2e/test-trading.log
 ```
 
 日志保存在：
