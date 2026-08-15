@@ -30,15 +30,9 @@ function Write-DeploymentLog {
     [Console]::Error.WriteLine($logLine)
 }
 
-$currentStage = "brokerage-readonly"
+$currentStage = "lean-preflight"
 Write-DeploymentLog "stage=run status=start trading_enabled=false"
 try {
-Write-DeploymentLog "stage=$currentStage status=start"
-$brokerageReadOnlyTestPath = Join-Path $RepositoryPath "scripts\test_windows_brokerage_e2e_readonly.ps1"
-& $brokerageReadOnlyTestPath
-Write-DeploymentLog "stage=$currentStage status=ok detail_log=http://192.168.50.135:8000/e2e/qmt-readonly-e2e.log"
-
-$currentStage = "lean-preflight"
 Write-DeploymentLog "stage=$currentStage status=start"
 $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
 $leanExecutable = "C:\Users\nemo\anaconda3\Scripts\lean.exe"

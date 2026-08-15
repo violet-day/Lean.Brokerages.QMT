@@ -1,4 +1,4 @@
-.PHONY: sync-windows install-windows test test-smoke test-trading
+.PHONY: sync-windows install-windows test test-readonly test-smoke test-trading
 
 test:
 	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build -> Windows NUnit tests -> package DLL"'
@@ -10,6 +10,9 @@ sync-windows:
 
 install-windows:
 	@./scripts/run_windows_deployment.sh install
+
+test-readonly:
+	@./scripts/run_windows_deployment.sh test-readonly
 
 test-smoke:
 	@./scripts/run_windows_deployment.sh test-smoke

@@ -6,8 +6,8 @@ repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
 
-if [[ "$action" != "install" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
-    echo "usage: $0 {install|test-smoke|test-trading}" >&2
+if [[ "$action" != "install" && "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
+    echo "usage: $0 {install|test-readonly|test-smoke|test-trading}" >&2
     exit 2
 fi
 
@@ -19,6 +19,10 @@ case "$action" in
     install)
         powershell_script_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\install_windows_lean_integration.ps1'
         remote_command="& '$powershell_script_path' -AccountId '$account_id'"
+        ;;
+    test-readonly)
+        readonly_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_readonly.ps1'
+        remote_command="& '$readonly_test_path'"
         ;;
     test-smoke)
         smoke_project_path='C:\Users\nemo\lean_project\china_smoke_test'

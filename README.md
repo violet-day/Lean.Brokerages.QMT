@@ -126,24 +126,27 @@ fast-forward the same branch on Windows without testing:
 make sync-windows
 ```
 
-The repository exposes five Make targets. Install once, use `test` after
-Brokerage changes, and use `test-smoke` for real-QMT read-only validation:
+The repository exposes six Make targets. Install once, use `test` after
+Brokerage changes, `test-readonly` for the real-QMT Brokerage E2E, and
+`test-smoke` for the complete LEAN live path:
 
 ```bash
 make sync-windows
 make install-windows
 make test
+make test-readonly
 make test-smoke
 make test-trading
 ```
 
-`make test-smoke` first runs the real Brokerage NUnit test, which checks the
+`make test-readonly` runs the real Brokerage NUnit test, which checks the
 account handshake, cash, holdings, open orders, daily/minute history,
-subscription lifecycle, and an explicit disconnect/connect cycle. It then runs
-the complete `lean-cli -> Docker -> LEAN Engine -> QMT` path. Both trading
-switches must be false, and no order method is called. During closed market
-hours the live tick stage is reported as skipped, not passed. This does not
-claim automatic fault recovery.
+subscription lifecycle, and an explicit disconnect/connect cycle.
+`make test-smoke` independently runs the complete
+`lean-cli -> Docker -> LEAN Engine -> QMT` path. Both require trading to be
+disabled, and neither calls an order method. During closed market hours the live
+tick stage is reported as skipped, not passed. Neither test claims automatic
+fault recovery.
 The latest concise Brokerage evidence is served from Windows at:
 
 ```text

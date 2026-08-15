@@ -68,13 +68,14 @@ Git push/fetch/fast-forward
 ## 真实只读全链路验证
 
 ```bash
+make test-readonly
 make test-smoke
 ```
 
-`make test-smoke` 先直接构造真实 `QmtGatewayClient` 和 `QmtBrokerage`，
+`make test-readonly` 直接构造真实 `QmtGatewayClient` 和 `QmtBrokerage`，
 验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、退订和主动断开后的
-连接重建；随后运行完整 LEAN live smoke。它不验证自动故障恢复，并要求 Gateway
-与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
+连接重建。`make test-smoke` 独立运行完整 LEAN live smoke。两者都不验证自动故障恢复，
+并要求 Gateway 与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
 精简证据由 Windows Nginx 暴露：
 
 ```text
@@ -139,7 +140,8 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 make sync-windows    # 仅通过 Git 同步已提交分支
 make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
 make test            # 同步、Windows 测试并发布版本化本地 DLL
-make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
+make test-readonly   # 只跑真实 Brokerage 非交易 E2E
+make test-smoke      # 只跑完整 LEAN live smoke
 make test-trading
 ```
 
