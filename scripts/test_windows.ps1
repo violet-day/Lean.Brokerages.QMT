@@ -178,4 +178,5 @@ try {
 finally {
     Pop-Location
     $windowsTestLock.Dispose()
+    Remove-Item -LiteralPath $windowsTestLockPath -Force -ErrorAction SilentlyContinue
 }

@@ -5,7 +5,6 @@ param(
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
     [string]$SmokeTestLivePath = "C:\Users\nemo\lean_project\china_smoke_test\live",
-    [string]$BrokerLogPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT\.test-logs",
     [string]$TopGainerLivePath = "C:\Users\nemo\lean_project\a top gainer\live",
     [string]$ContainerName = "qmt-live-logs",
     [string]$NginxImage = "nginx:alpine",
@@ -117,9 +116,9 @@ if (-not (Test-Path -LiteralPath $nginxConfigurationPath)) {
 }
 
 New-Item -ItemType Directory -Path $LogRootPath -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $LogRootPath "broker") -Force | Out-Null
 $logSources = @(
     @{ Name = "smoke_test"; Path = $SmokeTestLivePath },
-    @{ Name = "broker"; Path = $BrokerLogPath },
     @{ Name = "a-top-gainer"; Path = $TopGainerLivePath }
 )
 foreach ($logSource in $logSources) {

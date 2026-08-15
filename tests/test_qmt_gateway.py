@@ -1,9 +1,12 @@
 import importlib
 import json
+import os
 import socket
 import threading
 import time
 import unittest
+
+os.environ["QMT_GATEWAY_RUNTIME_LOG_PATH"] = os.devnull
 
 from qmt_python import lean_qmt_gateway
 

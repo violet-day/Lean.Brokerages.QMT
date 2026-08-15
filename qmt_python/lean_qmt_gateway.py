@@ -28,10 +28,14 @@ DEFAULT_BIND_PORT = 17890
 DEFAULT_STRATEGY_NAME = "LeanQmtGateway"
 ACCOUNT_TYPE = "STOCK"
 LOG_PREFIX = "[lean_qmt_gateway]"
-RUNTIME_LOG_PATH = os.path.join(
-    os.path.dirname(module_directory),
-    ".test-logs",
-    "qmt-gateway-runtime.log",
+RUNTIME_LOG_PATH = os.environ.get(
+    "QMT_GATEWAY_RUNTIME_LOG_PATH",
+    os.path.join(
+        os.path.expanduser("~"),
+        "lean_logs",
+        "broker",
+        "qmt-gateway-runtime.log",
+    ),
 )
 MAXIMUM_MESSAGE_BYTES = 1024 * 1024
 MAXIMUM_REQUESTS_PER_HANDLEBAR = 100
@@ -66,7 +70,7 @@ def _log(message, **fields):
     log_line = " ".join(parts)
     try:
         runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH)
-        if not os.path.isdir(runtime_log_directory):
+        if runtime_log_directory and not os.path.isdir(runtime_log_directory):
             os.makedirs(runtime_log_directory)
         with open(RUNTIME_LOG_PATH, "ab") as runtime_log_file:
             runtime_log_file.write((log_line + "\n").encode("utf-8", "replace"))

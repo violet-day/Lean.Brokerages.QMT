@@ -145,10 +145,12 @@ http://192.168.50.135:8000/broker/
 http://192.168.50.135:8000/a-top-gainer/
 ```
 
-The physical log directories live under `C:\Users\nemo\lean_logs`. The
-project `live`/`.test-logs` paths are symbolic links into that root. Nginx
-mounts only the root directory. `make serve-live-logs` performs the one-time
-migration and starts or replaces the Nginx container.
+The physical log directories live under `C:\Users\nemo\lean_logs`. Project
+`live` paths are symbolic links into that root, and the Gateway writes directly
+to `lean_logs\broker\qmt-gateway-runtime.log`. Build and deployment test logs
+remain private under the repository `.test-logs`. Nginx mounts only the unified
+root directory. `make serve-live-logs` performs the one-time migration and
+starts or replaces the Nginx container.
 
 ## One-time QMT Gateway setup
 
