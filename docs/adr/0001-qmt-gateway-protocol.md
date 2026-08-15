@@ -48,7 +48,11 @@ The server responds with:
 {"protocol_version":1,"message_type":"response","request_id":"...","operation":"hello","success":true,"error_code":"","error_message":"","payload":{"server_name":"qmt-python-gateway","account_id":"86033767","trading_enabled":false}}
 ```
 
-The client must compare the returned `account_id` with its configured account. A mismatch aborts the connection. `trading_enabled` is authoritative: an order-capable client must refuse place/cancel operations when it is false. Trading defaults to disabled on the server.
+An empty request `account_id` discovers the current Gateway account; the response
+must still contain a non-empty `account_id`. When the client supplies an expected
+account, it compares the returned value and aborts on mismatch. `trading_enabled`
+is authoritative: an order-capable client must refuse place/cancel operations when
+it is false. Trading defaults to disabled on the server.
 
 The Gateway never starts, stops, logs into, or restarts QMT. An operator starts QMT and the imported Python strategy manually.
 

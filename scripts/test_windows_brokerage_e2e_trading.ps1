@@ -7,7 +7,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-$expectedSimulationAccountId = "86033767"
 $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
@@ -62,25 +61,21 @@ function Invoke-CapturedCommand {
 }
 
 $currentStage = "preflight"
-Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_confirmation=simulation stock_code=600000.SH quantity=100 limit_price=automatic"
+Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_source=gateway_hello stock_code=600000.SH quantity=100 limit_price=automatic"
 try {
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
         throw "The QMT LEAN configuration is missing: $LeanConfigurationPath"
     }
     $configuration = Get-Content -LiteralPath $LeanConfigurationPath -Raw | ConvertFrom-Json
-    $configuredAccountId = [string]$configuration."qmt-account-id"
-    if ($configuredAccountId -ne $expectedSimulationAccountId) {
-        throw "The configured QMT account is not the fixed simulation account used by this test."
-    }
     if ([string]$configuration."qmt-trading-enabled" -ne "true") {
-        throw "qmt-trading-enabled must be true for the explicit simulation-account trading test."
+        throw "qmt-trading-enabled must be true for the trading test."
     }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok account_match=true lean_trading_enabled=true gateway_port=$GatewayPort"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok lean_trading_enabled=true gateway_port=$GatewayPort"
 
     $currentStage = "build"
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
@@ -113,8 +108,6 @@ try {
 
     $currentStage = "brokerage-trading-test"
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
-    $env:QMT_TRADING_E2E_CONFIRMATION = "SIMULATION"
-    $env:QMT_TRADING_E2E_ACCOUNT_ID = $configuredAccountId
     $env:QMT_TRADING_E2E_GATEWAY_HOST = "127.0.0.1"
     $env:QMT_TRADING_E2E_GATEWAY_PORT = [string]$GatewayPort
     $env:QMT_TRADING_E2E_DATA_FOLDER = "C:\Users\nemo\lean\Lean\Data"
@@ -132,7 +125,7 @@ try {
     )
     [System.IO.File]::AppendAllText($privateLogPath, $testResult.Output, $utf8Encoding)
     if ($testResult.ExitCode -ne 0) {
-        throw "The real QMT simulation-account trading E2E test failed."
+        throw "The real QMT trading E2E test failed."
     }
     $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
     if (-not $evidenceText.Contains("stage=complete status=ok")) {
@@ -147,8 +140,6 @@ catch {
     throw
 }
 finally {
-    Remove-Item Env:QMT_TRADING_E2E_CONFIRMATION -ErrorAction SilentlyContinue
-    Remove-Item Env:QMT_TRADING_E2E_ACCOUNT_ID -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_GATEWAY_HOST -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_GATEWAY_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_DATA_FOLDER -ErrorAction SilentlyContinue

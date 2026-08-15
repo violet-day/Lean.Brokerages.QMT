@@ -143,8 +143,8 @@ make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
 make test-trading
 ```
 
-`make test-trading` 只允许 Windows `lean-qmt.json` 中固定的模拟账号 `86033767`，
-并用 Gateway `hello` 返回值二次核对当前 QMT 登录账号。运行前需要手工将
+`make test-trading` 直接使用 Gateway `hello` 返回的当前 QMT 登录账号，账号由操作者
+自行确认。运行前需要手工将
 `lean-qmt.json` 的 `qmt-trading-enabled` 和 Gateway 的 `TRADING_ENABLED` 同时设为
 `true`，命令本身不会修改开关。测试固定使用 `600000.SH`、数量 `100`，根据最新行情
 自动计算不易成交的买入限价。测试验证限价单提交、`Submitted`

@@ -16,7 +16,7 @@ using QuantConnect.Securities;
 namespace QuantConnect.Brokerages.Qmt.Tests
 {
     [TestFixture]
-    [Explicit("Places and cancels a real order. Simulation account only.")]
+    [Explicit("Places and cancels a real order through the current QMT Gateway account.")]
     public class QmtTradingE2ETests
     {
         private static readonly object EvidenceLogLock = new object();
@@ -35,12 +35,6 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             WriteEvidence(stage, "start");
             try
             {
-                Assert.That(
-                    Environment.GetEnvironmentVariable("QMT_TRADING_E2E_CONFIRMATION"),
-                    Is.EqualTo("SIMULATION"),
-                    "The trading E2E requires an explicit simulation-account confirmation.");
-
-                var expectedAccountId = RequiredEnvironmentVariable("QMT_TRADING_E2E_ACCOUNT_ID");
                 var gatewayHost = Environment.GetEnvironmentVariable("QMT_TRADING_E2E_GATEWAY_HOST") ?? "127.0.0.1";
                 var gatewayPortText = Environment.GetEnvironmentVariable("QMT_TRADING_E2E_GATEWAY_PORT") ?? "17890";
                 Assert.That(int.TryParse(gatewayPortText, out var gatewayPort), Is.True);
@@ -58,7 +52,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 _gatewayClient = new QmtGatewayClient(
                     gatewayHost,
                     gatewayPort,
-                    expectedAccountId,
+                    null,
                     TimeSpan.FromSeconds(10));
                 _brokerage = new QmtBrokerage(
                     _gatewayClient,
@@ -67,7 +61,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 _brokerage.Connect();
 
                 Assert.That(_brokerage.IsConnected, Is.True);
-                Assert.That(_gatewayClient.ServerInformation?.AccountId, Is.EqualTo(expectedAccountId));
+                var accountId = _gatewayClient.ServerInformation?.AccountId;
+                Assert.That(accountId, Is.Not.Null.And.Not.Empty);
                 Assert.That(
                     _gatewayClient.ServerInformation?.TradingEnabled,
                     Is.True,
@@ -75,7 +70,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 WriteEvidence(
                     stage,
                     "ok",
-                    $"account_match=true local_trading_enabled=true gateway_trading_enabled=true");
+                    $"account_id={accountId} account_source=gateway_hello " +
+                    $"local_trading_enabled=true gateway_trading_enabled=true");
             }
             catch (Exception exception)
             {

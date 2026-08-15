@@ -226,22 +226,22 @@ false until real-QMT read-only validation and the simulated-account checklist
 in ROADMAP.md have passed. Enabling either setting is an operator decision and
 is never part of `make test`.
 
-The explicit simulation-account order/cancel test is:
+The explicit order/cancel test against the current QMT Gateway account is:
 
 ```bash
 make test-trading
 ```
 
-The command is fixed to simulation account `86033767`, `600000.SH`, and `100`
-shares. It reads the account from Windows `lean-qmt.json`, verifies it through
-the Gateway handshake, and calculates a non-marketable limit price from the
-latest quote. It refuses to run unless `qmt-trading-enabled=true` and the running
-Gateway reports `TRADING_ENABLED=True`. It places one limit order, requires the
-`Submitted` callback, cancels it, requires the `Canceled` callback, and confirms
-the final state through `query_orders`. On failure it queries by the unique test
+The command is fixed to `600000.SH` and `100` shares. It obtains the current
+account ID directly from the Gateway handshake and calculates a non-marketable
+limit price from the latest quote. The operator is responsible for the account
+currently logged into QMT. It refuses to run unless `qmt-trading-enabled=true`
+and the running Gateway reports `TRADING_ENABLED=True`. It places one limit
+order, requires the `Submitted` callback, cancels it, requires the `Canceled`
+callback, and confirms the final state through `query_orders`. On failure it
+queries by the unique test
 client ID and attempts to cancel any remaining open order. It does not modify
-either trading switch and must never be pointed at a live account. Its concise
-Windows log is:
+either trading switch. Its concise Windows log is:
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log

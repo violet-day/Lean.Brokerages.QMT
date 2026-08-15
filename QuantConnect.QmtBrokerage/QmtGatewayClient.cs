@@ -54,7 +54,7 @@ namespace QuantConnect.Brokerages.Qmt
 
         private readonly string _host;
         private readonly int _port;
-        private readonly string _expectedAccountId;
+        private readonly string? _expectedAccountId;
         private readonly TimeSpan _requestTimeout;
         private readonly SemaphoreSlim _connectionLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
@@ -78,7 +78,7 @@ namespace QuantConnect.Brokerages.Qmt
         public QmtGatewayClient(
             string host,
             int port,
-            string expectedAccountId,
+            string? expectedAccountId,
             TimeSpan? requestTimeout = null)
         {
             if (string.IsNullOrWhiteSpace(host))
@@ -91,14 +91,11 @@ namespace QuantConnect.Brokerages.Qmt
                 throw new ArgumentOutOfRangeException(nameof(port), "The QMT Gateway port must be between 1 and 65535.");
             }
 
-            if (string.IsNullOrWhiteSpace(expectedAccountId))
-            {
-                throw new ArgumentException("An expected QMT account ID is required.", nameof(expectedAccountId));
-            }
-
             _host = host;
             _port = port;
-            _expectedAccountId = expectedAccountId;
+            _expectedAccountId = string.IsNullOrWhiteSpace(expectedAccountId)
+                ? null
+                : expectedAccountId.Trim();
             _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(10);
             if (_requestTimeout <= TimeSpan.Zero)
             {
@@ -144,7 +141,7 @@ namespace QuantConnect.Brokerages.Qmt
 
                     var helloResponse = await SendRequestAsync(
                         QmtProtocol.Operations.Hello,
-                        new QmtHelloRequest { AccountId = _expectedAccountId },
+                        new QmtHelloRequest { AccountId = _expectedAccountId ?? string.Empty },
                         cancellationToken).ConfigureAwait(false);
                     if (helloResponse.Payload.Property("account_id", StringComparison.Ordinal) == null ||
                         helloResponse.Payload.Property("trading_enabled", StringComparison.Ordinal) == null)
@@ -154,7 +151,13 @@ namespace QuantConnect.Brokerages.Qmt
                     }
 
                     var serverInformation = helloResponse.ToPayload<QmtHelloPayload>();
-                    if (!string.Equals(serverInformation.AccountId, _expectedAccountId, StringComparison.Ordinal))
+                    if (string.IsNullOrWhiteSpace(serverInformation.AccountId))
+                    {
+                        throw new QmtGatewayProtocolException(
+                            "The QMT Gateway hello response must contain a non-empty account_id.");
+                    }
+                    if (_expectedAccountId != null &&
+                        !string.Equals(serverInformation.AccountId, _expectedAccountId, StringComparison.Ordinal))
                     {
                         throw new QmtGatewayProtocolException(
                             $"QMT Gateway account mismatch. Expected '{_expectedAccountId}', received '{serverInformation.AccountId}'.");

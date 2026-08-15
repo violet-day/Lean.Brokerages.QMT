@@ -185,7 +185,7 @@ make sync-windows    # 仅通过 Git 同步已提交分支
 make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
 make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-smoke      # 真实 Brokerage E2E + 完整 LEAN live smoke
-make test-trading # 固定模拟账号、600000.SH、100 股；限价按最新行情计算
+make test-trading # 账号从 Gateway 查询；固定 600000.SH、100 股；限价按最新行情计算
 ```
 
 ## 当前阻塞与最短下一步
