@@ -157,8 +157,12 @@ foreach ($logSource in $logSources) {
 }
 
 Copy-Item -LiteralPath $repositoryNginxConfigurationPath -Destination $installedNginxConfigurationPath -Force
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $configurationTestOutput = & $nginxExecutable -t -p $nginxPrefix -c "conf\qmt-live-logs.conf" 2>&1
-if ($LASTEXITCODE -ne 0) {
+$configurationTestExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+if ($configurationTestExitCode -ne 0) {
     $configurationTestOutput | ForEach-Object { Write-LiveLogServerLog "nginx=$_" }
     throw "The native Nginx configuration is invalid."
 }
