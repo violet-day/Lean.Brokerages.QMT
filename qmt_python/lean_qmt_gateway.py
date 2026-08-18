@@ -1580,7 +1580,23 @@ def init(
     except Exception as error:
         _log("config_load_failed", error=repr(error))
         raise
-    account_id = config["account_id"] or str(injected_account_id or "").strip()
+    configured_account_id = config["account_id"]
+    injected_account_id = str(injected_account_id or "").strip()
+    context_account_id = str(
+        _attribute(
+            context_info,
+            ("account", "account_id", "accountID", "accid"),
+            "",
+        )
+        or ""
+    ).strip()
+    account_id = configured_account_id or injected_account_id
+    _log(
+        "account_selection",
+        configured_account_id=configured_account_id,
+        context_account_id=context_account_id,
+        injected_account_id=injected_account_id,
+    )
     _log(
         "init_start",
         account_configured=bool(account_id),
