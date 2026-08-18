@@ -2,7 +2,10 @@ param(
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$LeanConfigurationPath = "C:\Users\nemo\lean_project\lean-qmt.json",
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
-    [int]$GatewayPort = 17890
+    [string]$EngineImage = "quantconnect/lean:latest",
+    [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
+    [int]$GatewayPort = 17890,
+    [string]$TaskPath = "test-trading > trading-e2e"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +13,7 @@ $ProgressPreference = "SilentlyContinue"
 $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
+. (Join-Path $PSScriptRoot "windows_build_cache.ps1")
 
 $privateLogDirectory = Join-Path $RepositoryPath ".test-logs"
 $privateLogPath = Join-Path $privateLogDirectory "windows-brokerage-e2e-trading-full.log"
@@ -26,6 +30,12 @@ function Write-TradingEvidence {
     $line = "$(Get-Date -Format o) $Message"
     [System.IO.File]::AppendAllText($userLogPath, $line + "`r`n", $utf8Encoding)
     [Console]::Error.WriteLine($line)
+}
+
+function Write-CurrentTask {
+    param([string]$CurrentTask)
+
+    Write-TradingEvidence "[qmt-task] $TaskPath > $CurrentTask"
 }
 
 function Invoke-CapturedCommand {
@@ -73,36 +83,51 @@ try {
     }
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort"
 
-    $currentStage = "build"
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
+    $currentStage = "build-cache"
+    Write-CurrentTask "csharp-build"
     $dotnetExecutable = Join-Path $env:USERPROFILE ".dotnet\dotnet.exe"
     if (-not (Test-Path -LiteralPath $dotnetExecutable)) {
         throw ".NET SDK is missing: $dotnetExecutable"
     }
-    $testProjectPath = Join-Path $RepositoryPath "QuantConnect.QmtBrokerage.Tests\QuantConnect.QmtBrokerage.Tests.csproj"
-    $buildResult = Invoke-CapturedCommand $dotnetExecutable @(
-        "build",
-        $testProjectPath,
-        "--configuration", "Release",
-        "--nologo",
-        "--verbosity", "minimal",
-        "--disable-build-servers",
-        "-nodeReuse:false",
-        "-p:UseSharedCompilation=false"
-    )
-    [System.IO.File]::AppendAllText($privateLogPath, $buildResult.Output, $utf8Encoding)
-    if ($buildResult.ExitCode -ne 0) {
-        $compilerError = @($buildResult.Output -split "`r?`n" | Where-Object {
-            $_ -match "error (CS|NU)[0-9]+"
-        } | Select-Object -First 1)
-        if ($compilerError.Count -ne 0) {
-            Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=failed detail=$($compilerError[0].Trim())"
-        }
-        throw "The QMT trading E2E test project failed to build."
+    $dotnetVersion = & $dotnetExecutable --version
+    $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
+    $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
+    $targetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
+    $leanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
+    if (-not $targetFramework -or -not $leanVersion) {
+        throw "The LEAN image does not declare lean_version and target_framework: $EngineImage"
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok errors=0"
+    $buildCacheState = Get-QmtWindowsBuildCacheState `
+        -RepositoryPath $RepositoryPath `
+        -ModuleRoot $ModuleRoot `
+        -LeanVersion $leanVersion `
+        -TargetFramework $targetFramework `
+        -DotnetVersion $dotnetVersion
+    if (-not $buildCacheState.IsBuildCacheHit) {
+        Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=miss reason=$($buildCacheState.BuildCacheMissReason) fingerprint=$($buildCacheState.BuildFingerprint)"
+        & (Join-Path $PSScriptRoot "test_windows.ps1") `
+            -RepositoryPath $RepositoryPath `
+            -EngineImage $EngineImage `
+            -ModuleRoot $ModuleRoot `
+            -TaskPath "$TaskPath > ensure-build"
+        if ($LASTEXITCODE -ne 0) {
+            throw "The shared QMT build and contract tests failed."
+        }
+        $buildCacheState = Get-QmtWindowsBuildCacheState `
+            -RepositoryPath $RepositoryPath `
+            -ModuleRoot $ModuleRoot `
+            -LeanVersion $leanVersion `
+            -TargetFramework $targetFramework `
+            -DotnetVersion $dotnetVersion
+        if (-not $buildCacheState.IsBuildCacheHit) {
+            throw "The shared QMT build cache is still invalid: $($buildCacheState.BuildCacheMissReason)"
+        }
+    }
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=hit action=skip-build fingerprint=$($buildCacheState.BuildFingerprint) dll_sha256=$($buildCacheState.PackagedAssemblyHash)"
+    $testProjectPath = $buildCacheState.TestProjectPath
 
     $currentStage = "brokerage-trading-test"
+    Write-CurrentTask "brokerage-trading-test"
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     $env:QMT_TRADING_E2E_GATEWAY_HOST = "127.0.0.1"
     $env:QMT_TRADING_E2E_GATEWAY_PORT = [string]$GatewayPort

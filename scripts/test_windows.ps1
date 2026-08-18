@@ -12,6 +12,7 @@ $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8Encoding
 [Console]::InputEncoding = $utf8Encoding
 $OutputEncoding = $utf8Encoding
+. (Join-Path $PSScriptRoot "windows_build_cache.ps1")
 $windowsTestLogDirectory = Join-Path $RepositoryPath ".test-logs"
 New-Item -ItemType Directory -Path $windowsTestLogDirectory -Force | Out-Null
 $windowsTestLockPath = Join-Path $windowsTestLogDirectory "windows-test.lock"
@@ -85,19 +86,6 @@ function Invoke-WindowsTestCommand {
     return $exitCode
 }
 
-function Get-TextSha256 {
-    param([string]$Text)
-
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $textBytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-        return ([System.BitConverter]::ToString($sha256.ComputeHash($textBytes))).Replace("-", "")
-    }
-    finally {
-        $sha256.Dispose()
-    }
-}
-
 Push-Location $RepositoryPath
 try {
     Write-WindowsTestLog "[qmt-task] $TaskPath"
@@ -156,83 +144,20 @@ try {
         throw "Expected .NET 10 SDK, found $dotnetVersion."
     }
 
-    $gitExecutable = (Get-Command git.exe -ErrorAction Stop).Source
-    $leanRepositoryPath = Join-Path (Split-Path -Parent $RepositoryPath) "Lean"
-    $leanCommit = (& $gitExecutable -C $leanRepositoryPath rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $leanCommit) {
-        throw "Could not determine the Windows LEAN commit: $leanRepositoryPath"
-    }
-    $leanTrackedChanges = @(& $gitExecutable -C $leanRepositoryPath status --porcelain --untracked-files=no)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not inspect the Windows LEAN worktree: $leanRepositoryPath"
-    }
-
-    $trackedBuildInputs = @(& $gitExecutable ls-files -s -- "QuantConnect.QmtBrokerage" "QuantConnect.QmtBrokerage.Tests" "global.json")
-    if ($LASTEXITCODE -ne 0 -or $trackedBuildInputs.Count -eq 0) {
-        throw "Could not determine the tracked QMT build inputs."
-    }
-    $buildFingerprintInput = @(
-        "schema_version=1"
-        "lean_commit=$leanCommit"
-        "lean_version=$leanVersion"
-        "target_framework=$targetFramework"
-        "dotnet_version=$dotnetVersion"
-        $trackedBuildInputs
-    ) -join "`n"
-    $buildFingerprint = Get-TextSha256 $buildFingerprintInput
-
-    $testProjectPath = ".\QuantConnect.QmtBrokerage.Tests\QuantConnect.QmtBrokerage.Tests.csproj"
-    $testAssemblyPath = Join-Path $RepositoryPath "QuantConnect.QmtBrokerage.Tests\bin\Release\QuantConnect.Brokerages.Qmt.Tests.dll"
-    $brokerageAssemblyPath = Join-Path $RepositoryPath "QuantConnect.QmtBrokerage\bin\Release\QuantConnect.Brokerages.Qmt.dll"
-    $moduleDirectory = Join-Path (Join-Path $ModuleRoot $leanVersion) $targetFramework
-    $packagedAssemblyPath = Join-Path $moduleDirectory "QuantConnect.Brokerages.Qmt.dll"
-    $buildManifestPath = Join-Path $moduleDirectory "build-manifest.json"
-    $isBuildCacheHit = $false
-    $buildCacheMissReason = "manifest-missing"
-    $packagedAssemblyHash = ""
-
-    if ($leanTrackedChanges.Count -ne 0) {
-        $buildCacheMissReason = "lean-worktree-dirty"
-    }
-    elseif (Test-Path -LiteralPath $buildManifestPath) {
-        try {
-            $buildManifest = Get-Content -LiteralPath $buildManifestPath -Raw | ConvertFrom-Json
-            if ([int]$buildManifest.schema_version -ne 1) {
-                $buildCacheMissReason = "manifest-version-mismatch"
-            }
-            elseif ([string]$buildManifest.build_fingerprint -ne $buildFingerprint) {
-                $buildCacheMissReason = "fingerprint-changed"
-            }
-            elseif (-not [bool]$buildManifest.tests_passed) {
-                $buildCacheMissReason = "tests-not-passed"
-            }
-            elseif (-not (Test-Path -LiteralPath $packagedAssemblyPath)) {
-                $buildCacheMissReason = "module-missing"
-            }
-            elseif (-not (Test-Path -LiteralPath $testAssemblyPath)) {
-                $buildCacheMissReason = "test-assembly-missing"
-            }
-            else {
-                $packagedAssemblyHash = (Get-FileHash -LiteralPath $packagedAssemblyPath -Algorithm SHA256).Hash
-                if ($packagedAssemblyHash -ne [string]$buildManifest.dll_sha256) {
-                    $buildCacheMissReason = "module-hash-mismatch"
-                }
-                else {
-                    $isBuildCacheHit = $true
-                }
-            }
-        }
-        catch {
-            $buildCacheMissReason = "manifest-invalid"
-        }
-    }
+    $buildCacheState = Get-QmtWindowsBuildCacheState `
+        -RepositoryPath $RepositoryPath `
+        -ModuleRoot $ModuleRoot `
+        -LeanVersion $leanVersion `
+        -TargetFramework $targetFramework `
+        -DotnetVersion $dotnetVersion
+    $testProjectPath = $buildCacheState.TestProjectPath
 
     Write-CurrentTask "csharp-build"
-    if ($isBuildCacheHit) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-cache status=hit action=skip-build fingerprint=$buildFingerprint dll_sha256=$packagedAssemblyHash"
+    if ($buildCacheState.IsBuildCacheHit) {
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-cache status=hit action=skip-build fingerprint=$($buildCacheState.BuildFingerprint) dll_sha256=$($buildCacheState.PackagedAssemblyHash)"
     }
     else {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-cache status=miss reason=$buildCacheMissReason fingerprint=$buildFingerprint"
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-cache status=miss reason=$($buildCacheState.BuildCacheMissReason) fingerprint=$($buildCacheState.BuildFingerprint)"
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-server status=start action=shutdown"
         & $dotnetExecutable build-server shutdown 2>&1 | ForEach-Object {
             Write-WindowsTestLog ([string]$_)
@@ -265,42 +190,19 @@ try {
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=ok duration_ms=$dotnetTestsDurationMilliseconds"
 
     Write-CurrentTask "package-dll"
-    if ($isBuildCacheHit) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=package status=ok action=reuse path=$moduleDirectory sha256=$packagedAssemblyHash fingerprint=$buildFingerprint"
+    if ($buildCacheState.IsBuildCacheHit) {
+        Write-WindowsTestLog "[qmt-test] host=windows stage=package status=ok action=reuse path=$($buildCacheState.ModuleDirectory) sha256=$($buildCacheState.PackagedAssemblyHash) fingerprint=$($buildCacheState.BuildFingerprint)"
     }
     else {
-        if (-not (Test-Path -LiteralPath $brokerageAssemblyPath)) {
-            throw "The QMT Brokerage build output is missing: $brokerageAssemblyPath"
-        }
-        New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
-        Copy-Item -LiteralPath $brokerageAssemblyPath -Destination $moduleDirectory -Force
-        $brokerageSymbolsPath = [System.IO.Path]::ChangeExtension($brokerageAssemblyPath, ".pdb")
-        if (Test-Path -LiteralPath $brokerageSymbolsPath) {
-            Copy-Item -LiteralPath $brokerageSymbolsPath -Destination $moduleDirectory -Force
-        }
-        $packagedAssemblyHash = (Get-FileHash -LiteralPath $packagedAssemblyPath -Algorithm SHA256).Hash
-        $buildManifest = [ordered]@{
-            schema_version = 1
-            build_fingerprint = $buildFingerprint
-            dll_sha256 = $packagedAssemblyHash
-            lean_commit = $leanCommit
-            lean_version = $leanVersion
-            target_framework = $targetFramework
-            dotnet_version = $dotnetVersion
-            tests_passed = $true
-        }
-        $temporaryBuildManifestPath = "$buildManifestPath.tmp"
-        [System.IO.File]::WriteAllText(
-            $temporaryBuildManifestPath,
-            ($buildManifest | ConvertTo-Json) + "`r`n",
-            $utf8Encoding)
-        Move-Item -LiteralPath $temporaryBuildManifestPath -Destination $buildManifestPath -Force
-        Write-WindowsTestLog "[qmt-test] host=windows stage=package status=ok action=update path=$moduleDirectory sha256=$packagedAssemblyHash fingerprint=$buildFingerprint"
+        $packagedAssemblyHash = Publish-QmtWindowsBuildCache `
+            -BuildCacheState $buildCacheState `
+            -TextEncoding $utf8Encoding
+        Write-WindowsTestLog "[qmt-test] host=windows stage=package status=ok action=update path=$($buildCacheState.ModuleDirectory) sha256=$packagedAssemblyHash fingerprint=$($buildCacheState.BuildFingerprint)"
     }
 
     $totalDurationMilliseconds = [int]((Get-Date) - $windowsTestStartedAt).TotalMilliseconds
     Write-WindowsTestLog "[qmt-test] host=windows stage=all status=ok duration_ms=$totalDurationMilliseconds"
-    Write-Output $moduleDirectory
+    Write-Output $buildCacheState.ModuleDirectory
 }
 finally {
     Pop-Location
