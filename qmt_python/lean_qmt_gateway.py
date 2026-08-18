@@ -1265,6 +1265,47 @@ class LeanQmtGateway(object):
             raise
 
         result_rows = _rows(result)
+        if detail_type == "ACCOUNT" and not result_rows:
+            account_query_probes = (
+                (
+                    "uppercase-three-arguments",
+                    (self.account_id, ACCOUNT_TYPE, detail_type),
+                ),
+                (
+                    "lowercase-four-arguments",
+                    (
+                        self.account_id,
+                        ACCOUNT_TYPE.lower(),
+                        detail_type.lower(),
+                        "",
+                    ),
+                ),
+                (
+                    "lowercase-three-arguments",
+                    (
+                        self.account_id,
+                        ACCOUNT_TYPE.lower(),
+                        detail_type.lower(),
+                    ),
+                ),
+            )
+            for probe_name, probe_arguments in account_query_probes:
+                try:
+                    probe_result = self.get_trade_detail_data_function(
+                        *probe_arguments
+                    )
+                    _log(
+                        "account_query_probe",
+                        probe=probe_name,
+                        raw_type=type(probe_result).__name__,
+                        rows=len(_rows(probe_result)),
+                    )
+                except Exception as probe_error:
+                    _log(
+                        "account_query_probe_failed",
+                        error=repr(probe_error),
+                        probe=probe_name,
+                    )
         _log(
             "query_ok",
             detail_type=detail_type,
