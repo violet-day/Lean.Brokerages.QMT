@@ -1306,6 +1306,31 @@ class LeanQmtGateway(object):
                         error=repr(probe_error),
                         probe=probe_name,
                     )
+            for probe_account_type in (
+                "CREDIT",
+                "FUTURE",
+                "HUGANGTONG",
+                "SHENGANGTONG",
+                "STOCK_OPTION",
+            ):
+                try:
+                    probe_result = self.get_trade_detail_data_function(
+                        self.account_id,
+                        probe_account_type,
+                        detail_type,
+                    )
+                    _log(
+                        "account_type_probe",
+                        account_type=probe_account_type,
+                        raw_type=type(probe_result).__name__,
+                        rows=len(_rows(probe_result)),
+                    )
+                except Exception as probe_error:
+                    _log(
+                        "account_type_probe_failed",
+                        account_type=probe_account_type,
+                        error=repr(probe_error),
+                    )
         _log(
             "query_ok",
             detail_type=detail_type,
