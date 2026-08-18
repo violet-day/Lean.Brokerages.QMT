@@ -144,7 +144,7 @@ LEAN PlaceOrder
 - [x] 在 lean-cli `qmt` 分支注册 QMT Brokerage。
 - [x] 配置 `live-mode-brokerage = QmtBrokerage`。
 - [x] 配置 `data-queue-handler = QmtBrokerage`。
-- [x] 增加 Gateway host、port、account ID、timeout 和 trading-enabled 配置。
+- [x] 增加 Gateway host、port、account ID、timeout、MarketOrder style 和 trading-enabled 配置。
 - [x] 在隔离的 Windows `lean-qmt.json` 增加 `live-qmt` environment。
 - [x] 固定 lean-cli `qmt` 分支并用 editable 安装。
 - [ ] 验证 `lean live deploy` 生成的 `config.json` 和镜像参数。
@@ -182,7 +182,7 @@ make package-windows # 同步并确保当前代码对应的已验证 DLL 已发�
 make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-readonly   # 只跑真实 Brokerage 非交易 E2E
 make test-smoke      # 只跑完整 LEAN live smoke
-make test-trading    # 账号从 Gateway 查询；固定 600000.SH、100 股；限价按最新行情计算
+make test-trading    # 校验配置账号；运行真实 QMT 模拟账户可重复交易 E2E
 ```
 
 ## 当前阻塞与最短下一步

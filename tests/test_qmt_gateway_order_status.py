@@ -96,6 +96,108 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         self.assertEqual(1, len(passorder_arguments))
         self.assertEqual("42", passorder_arguments[0][9])
 
+    def test_maps_market_order_styles_to_qmt_price_types(self):
+        test_cases = (
+            ("600000.SH", "latest-price", 5, -1.0),
+            ("000001.SZ", "latest-price", 5, -1.0),
+            ("830799.BJ", "latest-price", 5, -1.0),
+            ("600000.SH", "five-level-immediate-or-cancel", 42, 0.0),
+            ("000001.SZ", "five-level-immediate-or-cancel", 47, 0.0),
+            ("830799.BJ", "five-level-immediate-or-cancel", 42, 0.0),
+            ("600000.SH", "five-level-immediate-to-limit", 43, 0.0),
+            ("830799.BJ", "five-level-immediate-to-limit", 43, 0.0),
+            ("600000.SH", "counterparty-best", 44, 0.0),
+            ("000001.SZ", "counterparty-best", 44, 0.0),
+            ("830799.BJ", "counterparty-best", 44, 0.0),
+            ("600000.SH", "own-best", 45, 0.0),
+            ("000001.SZ", "own-best", 45, 0.0),
+            ("830799.BJ", "own-best", 45, 0.0),
+            ("000001.SZ", "immediate-or-cancel", 46, 0.0),
+            ("000001.SZ", "fill-or-kill", 48, 0.0),
+        )
+
+        for stock_code, market_order_style, price_type, price in test_cases:
+            with self.subTest(
+                stock_code=stock_code,
+                market_order_style=market_order_style,
+            ):
+                passorder_arguments = []
+
+                def record_passorder_arguments(*arguments):
+                    passorder_arguments.append(arguments)
+
+                gateway = self.gateway_module.LeanQmtGateway(
+                    context_info=object(),
+                    account_id="market-order-test",
+                    passorder_function=record_passorder_arguments,
+                )
+                response = gateway._place_order(
+                    {
+                        "client_order_id": "43",
+                        "stock_code": stock_code,
+                        "order_type": "market",
+                        "direction": "buy",
+                        "quantity": 100,
+                        "market_order_style": market_order_style,
+                        "qmt_price_type": price_type,
+                        "qmt_price": price,
+                    }
+                )
+
+                self.assertTrue(response["accepted"])
+                self.assertEqual(1, len(passorder_arguments))
+                self.assertEqual(price_type, passorder_arguments[0][4])
+                self.assertEqual(price, passorder_arguments[0][5])
+
+    def test_rejects_market_order_style_unsupported_by_exchange(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="market-order-test",
+            passorder_function=lambda *arguments: None,
+        )
+
+        with self.assertRaises(self.gateway_module._RequestError) as error:
+            gateway._place_order(
+                {
+                    "client_order_id": "44",
+                    "stock_code": "600000.SH",
+                    "order_type": "market",
+                    "direction": "buy",
+                    "quantity": 100,
+                    "market_order_style": "fill-or-kill",
+                    "qmt_price_type": 48,
+                    "qmt_price": 0,
+                }
+            )
+
+        self.assertEqual(
+            "UNSUPPORTED_MARKET_ORDER_STYLE",
+            error.exception.error_code,
+        )
+
+    def test_rejects_market_order_values_that_do_not_match_style(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="market-order-test",
+            passorder_function=lambda *arguments: None,
+        )
+
+        with self.assertRaises(self.gateway_module._RequestError) as error:
+            gateway._place_order(
+                {
+                    "client_order_id": "45",
+                    "stock_code": "600000.SH",
+                    "order_type": "market",
+                    "direction": "buy",
+                    "quantity": 100,
+                    "market_order_style": "five-level-immediate-or-cancel",
+                    "qmt_price_type": 5,
+                    "qmt_price": -1,
+                }
+            )
+
+        self.assertEqual("INVALID_REQUEST", error.exception.error_code)
+
     def test_order_error_callback_preserves_structured_rejection(self):
         gateway = self.gateway_module.LeanQmtGateway(
             context_info=None,

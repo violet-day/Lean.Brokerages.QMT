@@ -255,6 +255,15 @@ namespace QuantConnect.Brokerages.Qmt
         [JsonProperty("limit_price")]
         public decimal? LimitPrice { get; set; }
 
+        [JsonProperty("market_order_style")]
+        public string MarketOrderStyle { get; set; } = string.Empty;
+
+        [JsonProperty("qmt_price_type")]
+        public int? QmtPriceType { get; set; }
+
+        [JsonProperty("qmt_price")]
+        public decimal? QmtPrice { get; set; }
+
         [JsonProperty("strategy_name")]
         public string? StrategyName { get; set; }
     }

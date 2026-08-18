@@ -26,6 +26,7 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
+        private readonly QmtMarketOrderStyle _marketOrderStyle;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
@@ -49,12 +50,14 @@ namespace QuantConnect.Brokerages.Qmt
         public QmtBrokerage(
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
-            QmtSymbolMapper? symbolMapper = null)
+            QmtSymbolMapper? symbolMapper = null,
+            QmtMarketOrderStyle marketOrderStyle = QmtMarketOrderStyle.LatestPrice)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
+            _marketOrderStyle = marketOrderStyle;
             AccountBaseCurrency = "CNY";
             _gatewayClient.EventReceived += HandleGatewayEvent;
             _gatewayClient.Disconnected += HandleGatewayDisconnected;
@@ -197,14 +200,40 @@ namespace QuantConnect.Brokerages.Qmt
             try
             {
                 var clientOrderId = order.Id.ToStringInvariant();
+                var brokerageSymbol = _symbolMapper.GetBrokerageSymbol(order.Symbol);
+                QmtMarketOrderSubmission? marketOrderSubmission = null;
+                if (order.Type == OrderType.Market)
+                {
+                    try
+                    {
+                        marketOrderSubmission = QmtMarketOrderStyleResolver.Resolve(
+                            _marketOrderStyle,
+                            QmtSecurityCode.Parse(brokerageSymbol).Exchange);
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        Log.Trace(
+                            $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
+                            $"symbol={brokerageSymbol} market_order_style=" +
+                            $"{_marketOrderStyle}");
+                        OnMessage(new BrokerageMessageEvent(
+                            BrokerageMessageType.Warning,
+                            "UnsupportedMarketOrderStyle",
+                            exception.Message));
+                        return false;
+                    }
+                }
                 var response = SendRequest(QmtProtocol.Operations.PlaceOrder, new QmtPlaceOrderRequest
                 {
                     ClientOrderId = clientOrderId,
-                    StockCode = _symbolMapper.GetBrokerageSymbol(order.Symbol),
+                    StockCode = brokerageSymbol,
                     OrderType = order.Type == OrderType.Market ? "market" : "limit",
                     Direction = order.Direction == OrderDirection.Buy ? "buy" : "sell",
                     Quantity = Math.Abs(order.Quantity),
-                    LimitPrice = order is LimitOrder limitOrder ? limitOrder.LimitPrice : null
+                    LimitPrice = order is LimitOrder limitOrder ? limitOrder.LimitPrice : null,
+                    MarketOrderStyle = marketOrderSubmission?.Style ?? string.Empty,
+                    QmtPriceType = marketOrderSubmission?.PriceType,
+                    QmtPrice = marketOrderSubmission?.Price
                 });
                 var result = response.ToPayload<QmtPlaceOrderPayload>();
                 if (!result.Accepted)
@@ -224,7 +253,12 @@ namespace QuantConnect.Brokerages.Qmt
                 Log.Trace(
                     $"QmtBrokerage.PlaceOrder(): status=accepted lean_order_id={order.Id} " +
                     $"native_order_id={(string.IsNullOrWhiteSpace(result.NativeOrderId) ? "pending" : result.NativeOrderId)} " +
-                    $"symbol={order.Symbol.Value} type={order.Type} direction={order.Direction} quantity={Math.Abs(order.Quantity)}");
+                    $"symbol={order.Symbol.Value} type={order.Type} direction={order.Direction} quantity={Math.Abs(order.Quantity)}" +
+                    (marketOrderSubmission.HasValue
+                        ? $" market_order_style={marketOrderSubmission.Value.Style} " +
+                            $"qmt_price_type={marketOrderSubmission.Value.PriceType} " +
+                            $"qmt_price={marketOrderSubmission.Value.Price.ToStringInvariant()}"
+                        : string.Empty));
                 return true;
             }
             catch (Exception exception)

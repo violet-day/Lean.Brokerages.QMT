@@ -149,7 +149,7 @@ try {
         "--no-build",
         "--no-restore",
         "--nologo",
-        "--filter", "FullyQualifiedName~QmtReadOnlyE2ETests",
+        "--filter", "TestCategory=QmtReadOnlyE2E",
         "--logger", "console;verbosity=normal"
     )
     [System.IO.File]::AppendAllText($privateLogPath, $testResult.Output, $utf8Encoding)

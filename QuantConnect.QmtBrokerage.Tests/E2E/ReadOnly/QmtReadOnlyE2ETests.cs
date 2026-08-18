@@ -8,12 +8,15 @@ using QuantConnect.Algorithm;
 using QuantConnect.Configuration;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
+using QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure;
 using QuantConnect.Securities;
 
-namespace QuantConnect.Brokerages.Qmt.Tests
+namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
 {
     [TestFixture]
     [Explicit("Requires a running real QMT Gateway and QMT_E2E_ACCOUNT_ID.")]
+    [Category(QmtE2ETestCategories.ReadOnly)]
+    [NonParallelizable]
     public class QmtReadOnlyE2ETests
     {
         private static readonly object EvidenceLogLock = new object();

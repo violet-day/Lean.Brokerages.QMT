@@ -86,7 +86,17 @@ The Gateway never starts, stops, logs into, or restarts QMT. An operator starts 
 {"client_order_id":"42","stock_code":"600000.SH","order_type":"limit","direction":"buy","quantity":100,"limit_price":10.00,"strategy_name":"lean"}
 ```
 
-For `market`, `limit_price` is null/omitted. Response:
+For `market`, `limit_price` is null/omitted and the request carries the
+resolved semantic style plus the exact QMT values:
+
+```json
+{"client_order_id":"43","stock_code":"000001.SZ","order_type":"market","direction":"buy","quantity":100,"market_order_style":"five-level-immediate-or-cancel","qmt_price_type":47,"qmt_price":0}
+```
+
+The Gateway validates that the style, exchange suffix, QMT price type, and
+price agree before calling `passorder`. `latest-price` is QMT type `5` with
+price `-1`. Native market styles use price `0`; for Shanghai and Beijing this
+selects the exchange price limit as the protection boundary. Response:
 
 ```json
 {"accepted":true,"client_order_id":"42","native_order_id":"123"}

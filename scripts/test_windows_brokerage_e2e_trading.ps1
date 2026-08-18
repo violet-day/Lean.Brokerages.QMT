@@ -71,17 +71,29 @@ function Invoke-CapturedCommand {
 }
 
 $currentStage = "preflight"
-Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_source=gateway_hello stock_code=600000.SH quantity=100 limit_price=automatic"
+Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_source=gateway_hello stock_code=600000.SH quantity=100 order_types=limit,market"
 try {
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
         throw "The QMT LEAN configuration is missing: $LeanConfigurationPath"
     }
+    $configuration = Get-Content -LiteralPath $LeanConfigurationPath -Raw | ConvertFrom-Json
+    $accountId = [string]$configuration."qmt-account-id"
+    if (-not $accountId) {
+        throw "qmt-account-id is missing from $LeanConfigurationPath"
+    }
+    $marketOrderStyle = [string]$configuration."qmt-market-order-style"
+    if (-not $marketOrderStyle) {
+        $marketOrderStyle = "latest-price"
+    }
+    if ($marketOrderStyle -ne "latest-price") {
+        throw "test-trading requires qmt-market-order-style=latest-price for the QMT simulation account."
+    }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort market_order_style=$marketOrderStyle"
 
     $currentStage = "build-cache"
     Write-CurrentTask "csharp-build"
@@ -134,6 +146,8 @@ try {
     $env:QMT_TRADING_E2E_GATEWAY_PORT = [string]$GatewayPort
     $env:QMT_TRADING_E2E_DATA_FOLDER = "C:\Users\nemo\lean\Lean\Data"
     $env:QMT_TRADING_E2E_LOG_PATH = $userLogPath
+    $env:QMT_TRADING_E2E_ACCOUNT_ID = $accountId
+    $env:QMT_TRADING_E2E_TASK_PATH = $TaskPath
     $env:DOTNET_CLI_UI_LANGUAGE = "en-US"
     $testResult = Invoke-CapturedCommand $dotnetExecutable @(
         "test",
@@ -142,7 +156,7 @@ try {
         "--no-build",
         "--no-restore",
         "--nologo",
-        "--filter", "FullyQualifiedName~QmtTradingE2ETests",
+        "--filter", "TestCategory=QmtTradingRepeatable",
         "--logger", "console;verbosity=normal"
     )
     [System.IO.File]::AppendAllText($privateLogPath, $testResult.Output, $utf8Encoding)
@@ -150,10 +164,11 @@ try {
         throw "The real QMT trading E2E test failed."
     }
     $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
-    if (-not $evidenceText.Contains("stage=complete status=ok")) {
-        throw "The QMT trading E2E completion evidence is missing."
+    $completedTestCases = [regex]::Matches($evidenceText, "stage=case-complete status=ok").Count
+    if ($completedTestCases -lt 1) {
+        throw "The QMT trading E2E case completion evidence is missing."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok tests=1"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok tests=$completedTestCases"
     Write-TradingEvidence "[qmt-trading-e2e] stage=run status=ok log=http://192.168.50.135:8000/e2e/test-trading.log"
 }
 catch {
@@ -166,5 +181,7 @@ finally {
     Remove-Item Env:QMT_TRADING_E2E_GATEWAY_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_DATA_FOLDER -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_TRADING_E2E_LOG_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:QMT_TRADING_E2E_ACCOUNT_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:QMT_TRADING_E2E_TASK_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:DOTNET_CLI_UI_LANGUAGE -ErrorAction SilentlyContinue
 }

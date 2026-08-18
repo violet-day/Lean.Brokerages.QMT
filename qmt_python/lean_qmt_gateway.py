@@ -48,6 +48,38 @@ REQUEST_PUMP_START_TIME = "2000-01-01 00:00:00"
 REQUEST_PUMP_MARKET = "SH"
 NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS = 5.0
 NETWORK_RECOVERY_RETRY_SECONDS = 5.0
+MARKET_ORDER_SUBMISSIONS = {
+    "latest-price": {
+        "SH": (5, -1.0),
+        "SZ": (5, -1.0),
+        "BJ": (5, -1.0),
+    },
+    "five-level-immediate-or-cancel": {
+        "SH": (42, 0.0),
+        "SZ": (47, 0.0),
+        "BJ": (42, 0.0),
+    },
+    "five-level-immediate-to-limit": {
+        "SH": (43, 0.0),
+        "BJ": (43, 0.0),
+    },
+    "counterparty-best": {
+        "SH": (44, 0.0),
+        "SZ": (44, 0.0),
+        "BJ": (44, 0.0),
+    },
+    "own-best": {
+        "SH": (45, 0.0),
+        "SZ": (45, 0.0),
+        "BJ": (45, 0.0),
+    },
+    "immediate-or-cancel": {
+        "SZ": (46, 0.0),
+    },
+    "fill-or-kill": {
+        "SZ": (48, 0.0),
+    },
+}
 _runtime_log_lock = threading.Lock()
 
 
@@ -1318,8 +1350,7 @@ class LeanQmtGateway(object):
             )
 
         operation_type = 23 if direction == "buy" else 24
-        price_type = 5
-        model_price = -1
+        market_order_style = ""
         if order_type == "limit":
             model_price = _number(payload.get("limit_price"), -1)
             if model_price <= 0:
@@ -1328,6 +1359,38 @@ class LeanQmtGateway(object):
                     "limit_price must be positive for a limit order.",
                 )
             price_type = 11
+        else:
+            market_order_style = str(
+                payload.get("market_order_style") or ""
+            ).strip().lower()
+            submissions_by_exchange = MARKET_ORDER_SUBMISSIONS.get(
+                market_order_style
+            )
+            if submissions_by_exchange is None:
+                raise _RequestError(
+                    "INVALID_REQUEST",
+                    "market_order_style is required for a market order.",
+                )
+            exchange_suffix = stock_code.rsplit(".", 1)[1]
+            expected_submission = submissions_by_exchange.get(exchange_suffix)
+            if expected_submission is None:
+                raise _RequestError(
+                    "UNSUPPORTED_MARKET_ORDER_STYLE",
+                    "market_order_style %s is not supported for %s."
+                    % (market_order_style, exchange_suffix),
+                )
+            price_type = _integer(payload.get("qmt_price_type"), -1)
+            model_price = _number(payload.get("qmt_price"), None)
+            if (
+                price_type != expected_submission[0]
+                or model_price != expected_submission[1]
+            ):
+                raise _RequestError(
+                    "INVALID_REQUEST",
+                    "QMT market-order values do not match market_order_style %s "
+                    "for %s."
+                    % (market_order_style, exchange_suffix),
+                )
 
         strategy_name = str(
             payload.get("strategy_name") or self.strategy_name
@@ -1349,7 +1412,10 @@ class LeanQmtGateway(object):
             "place_order_submitted",
             client_order_id=client_order_id,
             direction=direction,
+            market_order_style=market_order_style or "none",
             order_type=order_type,
+            price=model_price,
+            price_type=price_type,
             quantity=int(quantity),
             stock_code=stock_code,
         )

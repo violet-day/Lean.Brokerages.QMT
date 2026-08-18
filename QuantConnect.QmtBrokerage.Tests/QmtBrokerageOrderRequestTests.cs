@@ -41,6 +41,76 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 Is.EqualTo(order.Id.ToString(CultureInfo.InvariantCulture)));
         }
 
+        [TestCase("600000.SH", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 42, 0)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 47, 0)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 42, 0)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.FiveLevelImmediateToLimit, "five-level-immediate-to-limit", 43, 0)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.FiveLevelImmediateToLimit, "five-level-immediate-to-limit", 43, 0)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.CounterpartyBest, "counterparty-best", 44, 0)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.CounterpartyBest, "counterparty-best", 44, 0)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.CounterpartyBest, "counterparty-best", 44, 0)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.OwnBest, "own-best", 45, 0)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.OwnBest, "own-best", 45, 0)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.OwnBest, "own-best", 45, 0)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.ImmediateOrCancel, "immediate-or-cancel", 46, 0)]
+        [TestCase("000001.SZ", QmtMarketOrderStyle.FillOrKill, "fill-or-kill", 48, 0)]
+        public void MapsMarketOrderStyleToExchangePriceType(
+            string stockCode,
+            QmtMarketOrderStyle marketOrderStyle,
+            string expectedStyle,
+            int expectedPriceType,
+            int expectedPrice)
+        {
+            var gatewayClient = new TestGatewayClient(cancellationSubmitted: true);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new TestOrderProvider(),
+                marketOrderStyle: marketOrderStyle);
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                stockCode,
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+
+            var result = brokerage.PlaceOrder(new MarketOrder(symbol, 100, DateTime.UtcNow));
+
+            Assert.That(result, Is.True);
+            Assert.That(gatewayClient.PlaceOrderRequest, Is.Not.Null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(gatewayClient.PlaceOrderRequest!.MarketOrderStyle, Is.EqualTo(expectedStyle));
+                Assert.That(gatewayClient.PlaceOrderRequest.QmtPriceType, Is.EqualTo(expectedPriceType));
+                Assert.That(gatewayClient.PlaceOrderRequest.QmtPrice, Is.EqualTo((decimal)expectedPrice));
+            });
+        }
+
+        [TestCase("000001.SZ", QmtMarketOrderStyle.FiveLevelImmediateToLimit)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.ImmediateOrCancel)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.ImmediateOrCancel)]
+        [TestCase("600000.SH", QmtMarketOrderStyle.FillOrKill)]
+        [TestCase("830799.BJ", QmtMarketOrderStyle.FillOrKill)]
+        public void RejectsMarketOrderStyleUnsupportedByExchange(
+            string stockCode,
+            QmtMarketOrderStyle marketOrderStyle)
+        {
+            var gatewayClient = new TestGatewayClient(cancellationSubmitted: true);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new TestOrderProvider(),
+                marketOrderStyle: marketOrderStyle);
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                stockCode,
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+
+            var result = brokerage.PlaceOrder(new MarketOrder(symbol, 100, DateTime.UtcNow));
+
+            Assert.That(result, Is.False);
+            Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void ReturnsGatewayCancellationResult(bool cancellationSubmitted)

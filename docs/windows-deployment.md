@@ -105,6 +105,16 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
   --detach
 ```
 
+测试账号在 `lean-qmt.json` 中使用：
+
+```json
+"qmt-market-order-style": "latest-price"
+```
+
+该值对应 QMT `price_type=5`，只是最新价选价。真实账户需要交易所原生五档市价时改为
+`five-level-immediate-or-cancel`，Brokerage 会将沪市/北市映射为 `42`、深市映射为
+`47`。QMT 模拟交易不支持原生股票市价类型 `42-48`，配置不会自动降级。
+
 先验证资金、持仓、未完成委托和实时行情，再在确认当前 QMT 账号后显式运行交易测试。
 
 ## 常规验证与日志
@@ -121,11 +131,13 @@ make test-smoke      # 只跑完整 LEAN live smoke
 make test-trading
 ```
 
-`make test-trading` 直接使用 Gateway `hello` 返回的当前 QMT 登录账号，账号由操作者
-自行确认。测试固定使用 `600000.SH`、数量 `100`，根据最新行情
-自动计算不易成交的买入限价。测试验证限价单提交、`Submitted`
-回调、撤单、`Canceled` 回调及最终订单查询；失败时按唯一 client ID 尝试撤销
-遗留委托。日志为：
+`make test-trading` 要求 Gateway `hello` 返回的账号与 `lean-qmt.json` 完全一致。
+测试固定使用 `600000.SH`、数量 `100`。模拟交易时段内验证非成交限价单的提交、
+`Submitted` 回调、撤单、`Canceled` 回调及最终订单查询；时段外验证 QMT 明确拒单。
+时段外同时验证 `latest-price` MarketOrder 被拒绝。本地非法订单 case 不会发送到
+QMT。`QmtTradingInventory` 类别中的 MarketOrder 成交 case 不属于默认
+`test-trading`，因为每次执行会增加 100 股 T+0 持仓。每个 case 失败时均按唯一
+client ID 查询并尝试撤销遗留委托。日志为：
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log

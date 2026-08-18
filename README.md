@@ -52,6 +52,22 @@ The plugin registers the `china` market ID, Shanghai time zone, weekday
 09:30–11:30/13:00–15:00 sessions, CNY quote currency, and a 0.01 price step.
 The China holiday calendar is still a production-readiness item.
 
+Select the QMT execution style once in `lean-qmt.json`; strategy calls remain
+ordinary LEAN `MarketOrder` calls:
+
+```json
+"qmt-market-order-style": "latest-price"
+```
+
+`latest-price` maps to QMT price type `5` and is the simulation-account
+compatible default. It is not an exchange-native market order. For a live
+account, `five-level-immediate-or-cancel` maps to `42` on Shanghai/Beijing and
+`47` on Shenzhen. Other explicit values are
+`five-level-immediate-to-limit`, `counterparty-best`, `own-best`,
+`immediate-or-cancel`, and `fill-or-kill`; unsupported exchange combinations
+are rejected before the Gateway is called. QMT documents native stock market
+price types `42` through `48` as unavailable in simulation trading.
+
 ## Repository layout
 
 ```text
@@ -63,7 +79,9 @@ QuantConnect.QmtBrokerage/
   QmtProtocol.cs              Protocol v1 DTOs
   QmtSymbolMapper.cs          China A-share/QMT code conversion
 QuantConnect.QmtBrokerage.Tests/
-  QmtReadOnlyE2ETests.cs      Real-QMT non-trading E2E
+  E2E/ReadOnly/               Real-QMT non-trading E2E
+  E2E/Trading/                Real-QMT simulation-account trading E2E
+  E2E/Infrastructure/         Shared categories and real-Gateway test context
   ...                         Mapping, model, and protocol contract tests
 qmt_python/
   qmt_gateway_entry.py        Stable code copied into a QMT strategy once
@@ -251,14 +269,16 @@ The explicit order/cancel test against the current QMT Gateway account is:
 make test-trading
 ```
 
-The command is fixed to `600000.SH` and `100` shares. It obtains the current
-account ID directly from the Gateway handshake and calculates a non-marketable
-limit price from the latest quote. The operator is responsible for the account
-currently logged into QMT. It places one limit order, requires the `Submitted`
-callback, cancels it, requires the `Canceled` callback, and confirms the final
-state through `query_orders`. On failure it queries by the unique test
-client ID and attempts to cancel any remaining open order. It does not modify
-Gateway or LEAN configuration. Its concise Windows log is:
+The repeatable category is fixed to `600000.SH` and `100` shares. It requires
+the Gateway handshake account to match `lean-qmt.json`, and selects cases for
+the QMT simulation session (`10:00-17:00` Asia/Shanghai). During the session it
+places a non-marketable limit order, validates `Submitted`, cancellation and
+the final `query_orders` state. Outside the session it requires the same safe
+limit order and a `latest-price` market order to be rejected. Local
+invalid-order cases do not reach QMT. The separate `QmtTradingInventory`
+category contains the session-only market-buy fill case because each run adds
+100 T+0 shares. Every case queries by its unique client ID and attempts to
+cancel a remaining open order. Its concise Windows log is:
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log
