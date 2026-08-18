@@ -1597,6 +1597,38 @@ def init(
         context_account_id=context_account_id,
         injected_account_id=injected_account_id,
     )
+    if (
+        configured_account_id
+        and injected_account_id
+        and configured_account_id != injected_account_id
+        and callable(get_trade_detail_data_function)
+    ):
+        for probe_account_type in (
+            "STOCK",
+            "CREDIT",
+            "FUTURE",
+            "HUGANGTONG",
+            "SHENGANGTONG",
+            "STOCK_OPTION",
+        ):
+            try:
+                probe_result = get_trade_detail_data_function(
+                    injected_account_id,
+                    probe_account_type,
+                    "ACCOUNT",
+                )
+                _log(
+                    "injected_account_probe",
+                    account_type=probe_account_type,
+                    raw_type=type(probe_result).__name__,
+                    rows=len(_rows(probe_result)),
+                )
+            except Exception as probe_error:
+                _log(
+                    "injected_account_probe_failed",
+                    account_type=probe_account_type,
+                    error=repr(probe_error),
+                )
     _log(
         "init_start",
         account_configured=bool(account_id),
