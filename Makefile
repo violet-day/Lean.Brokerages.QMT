@@ -14,7 +14,7 @@ install-windows:
 test-readonly:
 	@./scripts/run_windows_deployment.sh test-readonly
 
-test-smoke:
+test-smoke: test
 	@./scripts/run_windows_deployment.sh test-smoke
 
 test-trading:

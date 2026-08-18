@@ -143,7 +143,8 @@ make test-trading
 `make test-readonly` runs the real Brokerage NUnit test, which checks the
 account handshake, cash, holdings, open orders, daily/minute history,
 subscription lifecycle, and an explicit disconnect/connect cycle.
-`make test-smoke` independently runs the complete
+`make test-smoke` first runs the authoritative build, test, and module packaging
+workflow, then runs the complete
 `lean-cli -> Docker -> LEAN Engine -> QMT` path. Both require trading to be
 disabled, and neither calls an order method. During closed market hours the live
 tick stage is reported as skipped, not passed. Neither test claims automatic
