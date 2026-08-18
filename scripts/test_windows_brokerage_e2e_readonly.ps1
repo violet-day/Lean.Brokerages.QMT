@@ -115,7 +115,8 @@ try {
             -RepositoryPath $RepositoryPath `
             -EngineImage $EngineImage `
             -ModuleRoot $ModuleRoot `
-            -TaskPath "$TaskPath > ensure-build"
+            -TaskPath "$TaskPath > ensure-build" `
+            -EnsurePackage
         if ($LASTEXITCODE -ne 0) {
             throw "The shared QMT build and contract tests failed."
         }

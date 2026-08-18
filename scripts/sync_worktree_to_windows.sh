@@ -4,24 +4,25 @@ set -euo pipefail
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
-run_windows_tests=false
+windows_action='sync'
 parent_task_path="${QMT_TASK_PATH:-}"
 test_task_path="${parent_task_path:-${QMT_ROOT_TASK:-test}}"
 
 if [[ "${1:-}" == "--test" ]]; then
-    run_windows_tests=true
+    windows_action='test'
+elif [[ "${1:-}" == "--package" ]]; then
+    windows_action='package'
 elif [[ -n "${1:-}" ]]; then
-    echo "usage: $0 [--test]" >&2
+    echo "usage: $0 [--test|--package]" >&2
     exit 2
 fi
 
 test_log_directory="$repository_directory/.test-logs"
-windows_test_log_path="$test_log_directory/windows-test.log"
-
-windows_action='sync'
-if [[ "$run_windows_tests" == true ]]; then
-    windows_action='test'
+windows_test_log_name='windows-test.log'
+if [[ "$windows_action" == 'package' ]]; then
+    windows_test_log_name='windows-package.log'
 fi
+windows_test_log_path="$test_log_directory/$windows_test_log_name"
 
 if [[ -z "$parent_task_path" ]]; then
     current_task_path="${QMT_ROOT_TASK:-sync-windows}"
@@ -46,7 +47,7 @@ echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch 
 git -C "$repository_directory" push origin "HEAD:refs/heads/$repository_branch"
 echo "[qmt-test] host=mac stage=git-push status=ok branch=$repository_branch commit=$repository_commit"
 
-remote_command="\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$windows_repository_directory'; if (git status --porcelain --untracked-files=no) { throw 'The Windows QMT repository has uncommitted tracked changes.' }; git fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git switch '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git merge --ff-only 'origin/$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; \$windowsCommit = git rev-parse HEAD; if (\$windowsCommit -ne '$repository_commit') { throw \"Expected QMT commit $repository_commit, found \$windowsCommit.\" }; if ('$windows_action' -eq 'test') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }"
+remote_command="\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$windows_repository_directory'; if (git status --porcelain --untracked-files=no) { throw 'The Windows QMT repository has uncommitted tracked changes.' }; git fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git switch '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git merge --ff-only 'origin/$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; \$windowsCommit = git rev-parse HEAD; if (\$windowsCommit -ne '$repository_commit') { throw \"Expected QMT commit $repository_commit, found \$windowsCommit.\" }; if ('$windows_action' -eq 'test') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }; if ('$windows_action' -eq 'package') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path' -EnsurePackage; exit \$LASTEXITCODE }"
 encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
 
 remote_action_started_at_seconds="$(date +%s)"

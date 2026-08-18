@@ -6,16 +6,33 @@ repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
 task_path="${QMT_TASK_PATH:-${QMT_ROOT_TASK:-$action}}"
+skip_sync=false
 
 if [[ "$action" != "install" && "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
-    echo "usage: $0 {install|test-readonly|test-smoke|test-trading}" >&2
+    echo "usage: $0 {install|test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
+    exit 2
+fi
+if [[ "${2:-}" == "--skip-sync" ]]; then
+    skip_sync=true
+elif [[ -n "${2:-}" ]]; then
+    echo "usage: $0 {install|test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
+    exit 2
+fi
+if [[ -n "${3:-}" ]]; then
+    echo "usage: $0 {install|test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
     exit 2
 fi
 
 echo "[qmt-task] $task_path"
-echo "[qmt-deploy] host=mac stage=sync status=start action=$action"
-QMT_TASK_PATH="$task_path" "$repository_directory/scripts/sync_worktree_to_windows.sh"
-echo "[qmt-deploy] host=mac stage=sync status=ok action=$action"
+if [[ "$skip_sync" == false ]]; then
+    if [[ "$action" == 'install' ]]; then
+        QMT_TASK_PATH="$task_path" "$repository_directory/scripts/sync_worktree_to_windows.sh"
+    else
+        package_task_path="$task_path > package-windows"
+        echo "[qmt-task] $package_task_path"
+        QMT_TASK_PATH="$package_task_path" "$repository_directory/scripts/sync_worktree_to_windows.sh" --package
+    fi
+fi
 
 case "$action" in
     install)
@@ -24,7 +41,9 @@ case "$action" in
         ;;
     test-readonly)
         readonly_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_readonly.ps1'
-        remote_command="& '$readonly_test_path'"
+        readonly_e2e_task_path="$task_path > readonly-e2e"
+        echo "[qmt-task] $readonly_e2e_task_path"
+        remote_command="& '$readonly_test_path' -TaskPath '$readonly_e2e_task_path'"
         ;;
     test-smoke)
         smoke_project_path='C:\Users\nemo\lean_project\china_smoke_test'
@@ -35,7 +54,9 @@ case "$action" in
         ;;
     test-trading)
         trading_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_trading.ps1'
-        remote_command="& '$trading_test_path'"
+        trading_e2e_task_path="$task_path > trading-e2e"
+        echo "[qmt-task] $trading_e2e_task_path"
+        remote_command="& '$trading_test_path' -TaskPath '$trading_e2e_task_path'"
         ;;
 esac
 

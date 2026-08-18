@@ -6,7 +6,7 @@ export QMT_ROOT_TASK
 
 task_path = $(if $(filter $(1),$(QMT_ROOT_TASK)),$(QMT_ROOT_TASK),$(QMT_ROOT_TASK) > $(1))
 
-.PHONY: sync-windows install-windows test test-readonly test-smoke test-trading
+.PHONY: sync-windows install-windows package-windows test test-readonly test-smoke test-trading
 
 test:
 	@echo '[qmt-task] $(call task_path,test)'
@@ -20,11 +20,15 @@ sync-windows:
 install-windows:
 	@QMT_TASK_PATH='$(call task_path,install-windows)' ./scripts/run_windows_deployment.sh install
 
-test-readonly:
-	@QMT_TASK_PATH='$(call task_path,test-readonly)' ./scripts/run_windows_deployment.sh test-readonly
+package-windows:
+	@echo '[qmt-task] $(call task_path,package-windows)'
+	@QMT_TASK_PATH='$(call task_path,package-windows)' ./scripts/sync_worktree_to_windows.sh --package
 
-test-smoke: test
-	@QMT_TASK_PATH='$(call task_path,test-smoke)' ./scripts/run_windows_deployment.sh test-smoke
+test-readonly: package-windows
+	@QMT_TASK_PATH='$(call task_path,test-readonly)' ./scripts/run_windows_deployment.sh test-readonly --skip-sync
 
-test-trading:
-	@QMT_TASK_PATH='$(call task_path,test-trading)' ./scripts/run_windows_deployment.sh test-trading
+test-smoke: package-windows
+	@QMT_TASK_PATH='$(call task_path,test-smoke)' ./scripts/run_windows_deployment.sh test-smoke --skip-sync
+
+test-trading: package-windows
+	@QMT_TASK_PATH='$(call task_path,test-trading)' ./scripts/run_windows_deployment.sh test-trading --skip-sync

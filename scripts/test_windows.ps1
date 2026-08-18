@@ -2,7 +2,8 @@ param(
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
-    [string]$TaskPath = "test"
+    [string]$TaskPath = "test",
+    [switch]$EnsurePackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +27,8 @@ try {
 catch {
     throw "Another Windows QMT build/test/package process is already running."
 }
-$windowsTestLogPath = Join-Path $windowsTestLogDirectory "windows-test-full.log"
+$windowsTestLogName = if ($EnsurePackage) { "windows-package-full.log" } else { "windows-test-full.log" }
+$windowsTestLogPath = Join-Path $windowsTestLogDirectory $windowsTestLogName
 [System.IO.File]::WriteAllText($windowsTestLogPath, "", $utf8Encoding)
 
 function Write-WindowsTestLog {
@@ -110,30 +112,32 @@ try {
     }
     Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok image=$EngineImage lean_version=$leanVersion target_framework=$targetFramework"
 
-    $uvExecutable = (Get-Command uv -ErrorAction Stop).Source
-    $environmentStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=start command=`"$uvExecutable sync --locked`""
-    $commandExitCode = Invoke-WindowsTestCommand $uvExecutable @("sync", "--locked")
-    if ($commandExitCode -ne 0) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=failed exit_code=$commandExitCode"
-        throw "uv sync failed with exit code $commandExitCode."
-    }
+    if (-not $EnsurePackage) {
+        $uvExecutable = (Get-Command uv -ErrorAction Stop).Source
+        $environmentStartedAt = Get-Date
+        Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=start command=`"$uvExecutable sync --locked`""
+        $commandExitCode = Invoke-WindowsTestCommand $uvExecutable @("sync", "--locked")
+        if ($commandExitCode -ne 0) {
+            Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=failed exit_code=$commandExitCode"
+            throw "uv sync failed with exit code $commandExitCode."
+        }
 
-    $pythonExecutable = Join-Path $RepositoryPath ".venv\Scripts\python.exe"
-    $pythonVersion = & $pythonExecutable --version 2>&1
-    $environmentDurationMilliseconds = [int]((Get-Date) - $environmentStartedAt).TotalMilliseconds
-    Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=ok python=`"$pythonVersion`" duration_ms=$environmentDurationMilliseconds"
+        $pythonExecutable = Join-Path $RepositoryPath ".venv\Scripts\python.exe"
+        $pythonVersion = & $pythonExecutable --version 2>&1
+        $environmentDurationMilliseconds = [int]((Get-Date) - $environmentStartedAt).TotalMilliseconds
+        Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=ok python=`"$pythonVersion`" duration_ms=$environmentDurationMilliseconds"
 
-    Write-CurrentTask "python-tests"
-    $pythonTestsStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=start command=`"$pythonExecutable -m unittest discover -s tests -v`""
-    $commandExitCode = Invoke-WindowsTestCommand $pythonExecutable @("-m", "unittest", "discover", "-s", "tests", "-v")
-    if ($commandExitCode -ne 0) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=failed exit_code=$commandExitCode"
-        throw "Python tests failed with exit code $commandExitCode."
+        Write-CurrentTask "python-tests"
+        $pythonTestsStartedAt = Get-Date
+        Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=start command=`"$pythonExecutable -m unittest discover -s tests -v`""
+        $commandExitCode = Invoke-WindowsTestCommand $pythonExecutable @("-m", "unittest", "discover", "-s", "tests", "-v")
+        if ($commandExitCode -ne 0) {
+            Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=failed exit_code=$commandExitCode"
+            throw "Python tests failed with exit code $commandExitCode."
+        }
+        $pythonTestsDurationMilliseconds = [int]((Get-Date) - $pythonTestsStartedAt).TotalMilliseconds
+        Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=ok duration_ms=$pythonTestsDurationMilliseconds"
     }
-    $pythonTestsDurationMilliseconds = [int]((Get-Date) - $pythonTestsStartedAt).TotalMilliseconds
-    Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=ok duration_ms=$pythonTestsDurationMilliseconds"
 
     $dotnetExecutable = Join-Path $env:USERPROFILE ".dotnet\dotnet.exe"
     if (-not (Test-Path -LiteralPath $dotnetExecutable)) {
@@ -178,16 +182,18 @@ try {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=ok duration_ms=$dotnetBuildDurationMilliseconds"
     }
 
-    Write-CurrentTask "csharp-tests"
-    $dotnetTestsStartedAt = Get-Date
-    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
-    $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
-    if ($commandExitCode -ne 0) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=failed exit_code=$commandExitCode"
-        throw ".NET tests failed with exit code $commandExitCode."
+    if (-not $EnsurePackage -or -not $buildCacheState.IsBuildCacheHit) {
+        Write-CurrentTask "csharp-tests"
+        $dotnetTestsStartedAt = Get-Date
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
+        $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
+        if ($commandExitCode -ne 0) {
+            Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=failed exit_code=$commandExitCode"
+            throw ".NET tests failed with exit code $commandExitCode."
+        }
+        $dotnetTestsDurationMilliseconds = [int]((Get-Date) - $dotnetTestsStartedAt).TotalMilliseconds
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=ok duration_ms=$dotnetTestsDurationMilliseconds"
     }
-    $dotnetTestsDurationMilliseconds = [int]((Get-Date) - $dotnetTestsStartedAt).TotalMilliseconds
-    Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=ok duration_ms=$dotnetTestsDurationMilliseconds"
 
     Write-CurrentTask "package-dll"
     if ($buildCacheState.IsBuildCacheHit) {
