@@ -162,6 +162,22 @@ def _load_config():
     }
 
 
+def _select_account_id(configured_account_id, injected_account_id):
+    configured_account_id = str(configured_account_id or "").strip()
+    injected_account_id = str(injected_account_id or "").strip()
+    if (
+        configured_account_id
+        and injected_account_id
+        and configured_account_id != injected_account_id
+    ):
+        raise RuntimeError(
+            "Configured QMT account %s does not match the QMT-injected "
+            "account %s."
+            % (configured_account_id, injected_account_id)
+        )
+    return injected_account_id or configured_account_id
+
+
 def _attribute(value, attribute_names, default=""):
     for attribute_name in attribute_names:
         try:
@@ -1265,72 +1281,6 @@ class LeanQmtGateway(object):
             raise
 
         result_rows = _rows(result)
-        if detail_type == "ACCOUNT" and not result_rows:
-            account_query_probes = (
-                (
-                    "uppercase-three-arguments",
-                    (self.account_id, ACCOUNT_TYPE, detail_type),
-                ),
-                (
-                    "lowercase-four-arguments",
-                    (
-                        self.account_id,
-                        ACCOUNT_TYPE.lower(),
-                        detail_type.lower(),
-                        "",
-                    ),
-                ),
-                (
-                    "lowercase-three-arguments",
-                    (
-                        self.account_id,
-                        ACCOUNT_TYPE.lower(),
-                        detail_type.lower(),
-                    ),
-                ),
-            )
-            for probe_name, probe_arguments in account_query_probes:
-                try:
-                    probe_result = self.get_trade_detail_data_function(
-                        *probe_arguments
-                    )
-                    _log(
-                        "account_query_probe",
-                        probe=probe_name,
-                        raw_type=type(probe_result).__name__,
-                        rows=len(_rows(probe_result)),
-                    )
-                except Exception as probe_error:
-                    _log(
-                        "account_query_probe_failed",
-                        error=repr(probe_error),
-                        probe=probe_name,
-                    )
-            for probe_account_type in (
-                "CREDIT",
-                "FUTURE",
-                "HUGANGTONG",
-                "SHENGANGTONG",
-                "STOCK_OPTION",
-            ):
-                try:
-                    probe_result = self.get_trade_detail_data_function(
-                        self.account_id,
-                        probe_account_type,
-                        detail_type,
-                    )
-                    _log(
-                        "account_type_probe",
-                        account_type=probe_account_type,
-                        raw_type=type(probe_result).__name__,
-                        rows=len(_rows(probe_result)),
-                    )
-                except Exception as probe_error:
-                    _log(
-                        "account_type_probe_failed",
-                        account_type=probe_account_type,
-                        error=repr(probe_error),
-                    )
         _log(
             "query_ok",
             detail_type=detail_type,
@@ -1590,45 +1540,16 @@ def init(
         )
         or ""
     ).strip()
-    account_id = configured_account_id or injected_account_id
     _log(
         "account_selection",
         configured_account_id=configured_account_id,
         context_account_id=context_account_id,
         injected_account_id=injected_account_id,
     )
-    if (
-        configured_account_id
-        and injected_account_id
-        and configured_account_id != injected_account_id
-        and callable(get_trade_detail_data_function)
-    ):
-        for probe_account_type in (
-            "STOCK",
-            "CREDIT",
-            "FUTURE",
-            "HUGANGTONG",
-            "SHENGANGTONG",
-            "STOCK_OPTION",
-        ):
-            try:
-                probe_result = get_trade_detail_data_function(
-                    injected_account_id,
-                    probe_account_type,
-                    "ACCOUNT",
-                )
-                _log(
-                    "injected_account_probe",
-                    account_type=probe_account_type,
-                    raw_type=type(probe_result).__name__,
-                    rows=len(_rows(probe_result)),
-                )
-            except Exception as probe_error:
-                _log(
-                    "injected_account_probe_failed",
-                    account_type=probe_account_type,
-                    error=repr(probe_error),
-                )
+    account_id = _select_account_id(
+        configured_account_id,
+        injected_account_id,
+    )
     _log(
         "init_start",
         account_configured=bool(account_id),
