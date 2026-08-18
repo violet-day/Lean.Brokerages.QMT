@@ -1,7 +1,8 @@
 param(
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
     [string]$EngineImage = "quantconnect/lean:latest",
-    [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage"
+    [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
+    [string]$TaskPath = "test"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +35,12 @@ function Write-WindowsTestLog {
     [Console]::Error.WriteLine($Message)
 }
 
+function Write-CurrentTask {
+    param([string]$CurrentTask)
+
+    Write-WindowsTestLog "[qmt-task] $TaskPath > $CurrentTask"
+}
+
 function Invoke-WindowsTestCommand {
     param(
         [string]$Executable,
@@ -60,14 +67,20 @@ function Invoke-WindowsTestCommand {
     $standardError = $standardErrorTask.Result
     if ($standardOutput) {
         [System.IO.File]::AppendAllText($windowsTestLogPath, $standardOutput, $utf8Encoding)
-        [Console]::Error.Write($standardOutput)
     }
     if ($standardError) {
         [System.IO.File]::AppendAllText($windowsTestLogPath, $standardError, $utf8Encoding)
-        [Console]::Error.Write($standardError)
     }
 
     $exitCode = $process.ExitCode
+    if ($exitCode -ne 0) {
+        if ($standardOutput) {
+            [Console]::Error.Write($standardOutput)
+        }
+        if ($standardError) {
+            [Console]::Error.Write($standardError)
+        }
+    }
     $process.Dispose()
     return $exitCode
 }
@@ -87,6 +100,7 @@ function Get-TextSha256 {
 
 Push-Location $RepositoryPath
 try {
+    Write-WindowsTestLog "[qmt-task] $TaskPath"
     $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
     & $dockerExecutable image inspect $EngineImage 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -122,6 +136,7 @@ try {
     $environmentDurationMilliseconds = [int]((Get-Date) - $environmentStartedAt).TotalMilliseconds
     Write-WindowsTestLog "[qmt-test] host=windows stage=environment status=ok python=`"$pythonVersion`" duration_ms=$environmentDurationMilliseconds"
 
+    Write-CurrentTask "python-tests"
     $pythonTestsStartedAt = Get-Date
     Write-WindowsTestLog "[qmt-test] host=windows stage=python-tests status=start command=`"$pythonExecutable -m unittest discover -s tests -v`""
     $commandExitCode = Invoke-WindowsTestCommand $pythonExecutable @("-m", "unittest", "discover", "-s", "tests", "-v")
@@ -212,6 +227,7 @@ try {
         }
     }
 
+    Write-CurrentTask "csharp-build"
     if ($isBuildCacheHit) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-cache status=hit action=skip-build fingerprint=$buildFingerprint dll_sha256=$packagedAssemblyHash"
     }
@@ -237,6 +253,7 @@ try {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=ok duration_ms=$dotnetBuildDurationMilliseconds"
     }
 
+    Write-CurrentTask "csharp-tests"
     $dotnetTestsStartedAt = Get-Date
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
     $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
@@ -247,6 +264,7 @@ try {
     $dotnetTestsDurationMilliseconds = [int]((Get-Date) - $dotnetTestsStartedAt).TotalMilliseconds
     Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=ok duration_ms=$dotnetTestsDurationMilliseconds"
 
+    Write-CurrentTask "package-dll"
     if ($isBuildCacheHit) {
         Write-WindowsTestLog "[qmt-test] host=windows stage=package status=ok action=reuse path=$moduleDirectory sha256=$packagedAssemblyHash fingerprint=$buildFingerprint"
     }

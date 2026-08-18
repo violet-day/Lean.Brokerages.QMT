@@ -5,7 +5,8 @@ param(
     [string]$ResearchImage = "quantconnect/research:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
-    [int]$GatewayPort = 17890
+    [int]$GatewayPort = 17890,
+    [string]$TaskPath = "test-smoke > lean-live-smoke"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +29,15 @@ function Write-DeploymentLog {
     [System.IO.File]::AppendAllText($liveTestLogPath, $logLine + "`r`n", $utf8Encoding)
     [System.IO.File]::AppendAllText($smokeLogPath, $logLine + "`r`n", $utf8Encoding)
     [Console]::Error.WriteLine($logLine)
+}
+
+function Write-CurrentTask {
+    param([string]$CurrentTask)
+
+    $taskLine = "$(Get-Date -Format o) [qmt-task] $TaskPath > $CurrentTask"
+    [System.IO.File]::AppendAllText($liveTestLogPath, $taskLine + "`r`n", $utf8Encoding)
+    [System.IO.File]::AppendAllText($smokeLogPath, $taskLine + "`r`n", $utf8Encoding)
+    [Console]::Error.WriteLine($taskLine)
 }
 
 $currentStage = "lean-preflight"
@@ -153,6 +163,7 @@ try {
     }
     Write-DeploymentLog "stage=$currentStage status=ok"
 
+    Write-CurrentTask "start-container"
     $currentStage = "container-start"
     Write-DeploymentLog "stage=$currentStage status=start"
     $containerDiscoveryDeadline = (Get-Date).AddSeconds(30)
@@ -167,6 +178,8 @@ try {
     }
     Write-DeploymentLog "stage=$currentStage status=ok container_id=$containerId"
 
+    Write-CurrentTask "history"
+    $currentValidationTask = "history"
     $currentStage = "lean-validation"
     Write-DeploymentLog "stage=$currentStage status=start"
     $validationDeadline = (Get-Date).AddSeconds(120)
@@ -182,6 +195,20 @@ try {
         $algorithmInitializationPassed = $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
         $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
         $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok operations=readonly")
+
+        $nextValidationTask = if (-not $historyPassed) {
+            "history"
+        }
+        elseif (-not ($accountPassed -and $positionsPassed -and $ordersPassed)) {
+            "account"
+        }
+        else {
+            "subscription"
+        }
+        if ($nextValidationTask -ne $currentValidationTask) {
+            Write-CurrentTask $nextValidationTask
+            $currentValidationTask = $nextValidationTask
+        }
 
         if ($historyPassed -and $accountPassed -and $positionsPassed -and $ordersPassed -and $subscriptionPassed -and $algorithmInitializationPassed) {
             if ($minuteBarPassed -and $completed) {

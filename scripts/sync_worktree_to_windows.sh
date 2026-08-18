@@ -5,6 +5,8 @@ set -euo pipefail
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
 run_windows_tests=false
+parent_task_path="${QMT_TASK_PATH:-}"
+test_task_path="${parent_task_path:-${QMT_ROOT_TASK:-test}}"
 
 if [[ "${1:-}" == "--test" ]]; then
     run_windows_tests=true
@@ -21,6 +23,15 @@ if [[ "$run_windows_tests" == true ]]; then
     windows_action='test'
 fi
 
+if [[ -z "$parent_task_path" ]]; then
+    current_task_path="${QMT_ROOT_TASK:-sync-windows}"
+elif [[ "$parent_task_path" == "sync-windows" || "$parent_task_path" == *" > sync-windows" ]]; then
+    current_task_path="$parent_task_path"
+else
+    current_task_path="$parent_task_path > sync-windows"
+fi
+echo "[qmt-task] $current_task_path"
+
 if [[ -n "$(git -C "$repository_directory" status --porcelain)" ]]; then
     echo "Git synchronization requires a clean worktree. Commit the following changes first:" >&2
     git -C "$repository_directory" status --short >&2
@@ -35,7 +46,7 @@ echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch 
 git -C "$repository_directory" push origin "HEAD:refs/heads/$repository_branch"
 echo "[qmt-test] host=mac stage=git-push status=ok branch=$repository_branch commit=$repository_commit"
 
-remote_command="\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$windows_repository_directory'; if (git status --porcelain --untracked-files=no) { throw 'The Windows QMT repository has uncommitted tracked changes.' }; git fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git switch '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git merge --ff-only 'origin/$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; \$windowsCommit = git rev-parse HEAD; if (\$windowsCommit -ne '$repository_commit') { throw \"Expected QMT commit $repository_commit, found \$windowsCommit.\" }; if ('$windows_action' -eq 'test') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory'; exit \$LASTEXITCODE }"
+remote_command="\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$windows_repository_directory'; if (git status --porcelain --untracked-files=no) { throw 'The Windows QMT repository has uncommitted tracked changes.' }; git fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git switch '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git merge --ff-only 'origin/$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; \$windowsCommit = git rev-parse HEAD; if (\$windowsCommit -ne '$repository_commit') { throw \"Expected QMT commit $repository_commit, found \$windowsCommit.\" }; if ('$windows_action' -eq 'test') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }"
 encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
 
 remote_action_started_at_seconds="$(date +%s)"
@@ -43,7 +54,7 @@ echo "[qmt-test] host=mac stage=windows status=start action=$windows_action"
 mkdir -p "$test_log_directory"
 zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command" \
     2>&1 \
-    | LC_ALL=C tr -d '\r' \
+    | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$windows_test_log_path"
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"

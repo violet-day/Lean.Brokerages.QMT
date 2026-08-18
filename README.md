@@ -97,6 +97,9 @@ beside the packaged DLL maps the tracked C# inputs, LEAN commit, engine labels,
 and .NET SDK to the DLL hash. An exact match reuses the verified DLL and runs
 NUnit with `--no-build`. It does not connect to QMT and it never submits an
 order. Real Gateway validation uses the explicit read-only E2E commands below.
+Console output prints the active task path, for example
+`test-smoke > test > csharp-build`; successful command details remain in the
+full Windows log instead of being repeated on the console.
 
 The authoritative Windows checkout is:
 

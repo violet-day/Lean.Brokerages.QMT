@@ -5,14 +5,16 @@ set -euo pipefail
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
 account_id="${QMT_ACCOUNT_ID:-86033767}"
+task_path="${QMT_TASK_PATH:-${QMT_ROOT_TASK:-$action}}"
 
 if [[ "$action" != "install" && "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
     echo "usage: $0 {install|test-readonly|test-smoke|test-trading}" >&2
     exit 2
 fi
 
+echo "[qmt-task] $task_path"
 echo "[qmt-deploy] host=mac stage=sync status=start action=$action"
-"$repository_directory/scripts/sync_worktree_to_windows.sh"
+QMT_TASK_PATH="$task_path" "$repository_directory/scripts/sync_worktree_to_windows.sh"
 echo "[qmt-deploy] host=mac stage=sync status=ok action=$action"
 
 case "$action" in
@@ -27,7 +29,9 @@ case "$action" in
     test-smoke)
         smoke_project_path='C:\Users\nemo\lean_project\china_smoke_test'
         smoke_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_deployment.ps1'
-        remote_command="\$ErrorActionPreference = 'Stop'; git -C '$smoke_project_path' pull --ff-only; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; & '$smoke_test_path'"
+        lean_live_smoke_task_path="$task_path > lean-live-smoke"
+        echo "[qmt-task] $lean_live_smoke_task_path"
+        remote_command="\$ErrorActionPreference = 'Stop'; git -C '$smoke_project_path' pull --ff-only; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; & '$smoke_test_path' -TaskPath '$lean_live_smoke_task_path'"
         ;;
     test-trading)
         trading_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_trading.ps1'
@@ -49,6 +53,6 @@ mkdir -p "$log_directory"
 echo "[qmt-deploy] host=mac stage=windows status=start action=$action"
 zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command" \
     2>&1 \
-    | LC_ALL=C tr -d '\r' \
+    | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$log_path"
 echo "[qmt-deploy] host=mac stage=windows status=ok action=$action log=$log_path"
