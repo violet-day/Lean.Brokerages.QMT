@@ -90,11 +90,13 @@ make test
 
 The command requires a clean Git worktree, pushes the current branch, and
 fast-forwards the same branch on Windows. It then runs Python compatibility
-tests, `dotnet build`, non-explicit NUnit contract tests, and copies the QMT
-assembly into the local module directory selected from the default LEAN image's
-`lean_version` and `target_framework` labels. It does not connect to QMT and it
-never submits an order. Real Gateway validation uses the explicit read-only E2E
-commands below.
+tests, builds changed C# inputs, runs non-explicit NUnit contract tests, and
+copies the QMT assembly into the local module directory selected from the
+default LEAN image's `lean_version` and `target_framework` labels. A manifest
+beside the packaged DLL maps the tracked C# inputs, LEAN commit, engine labels,
+and .NET SDK to the DLL hash. An exact match reuses the verified DLL and runs
+NUnit with `--no-build`. It does not connect to QMT and it never submits an
+order. Real Gateway validation uses the explicit read-only E2E commands below.
 
 The authoritative Windows checkout is:
 
