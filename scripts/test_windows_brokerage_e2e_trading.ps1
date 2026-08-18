@@ -5,7 +5,9 @@ param(
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
     [int]$GatewayPort = 17890,
-    [string]$TaskPath = "test-trading > trading-e2e"
+    [string]$TaskPath = "test-trading > trading-e2e",
+    [string]$LeanVersion = "",
+    [string]$TargetFramework = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,18 +111,23 @@ try {
         throw ".NET SDK is missing: $dotnetExecutable"
     }
     $dotnetVersion = & $dotnetExecutable --version
-    $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
-    $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
-    $targetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
-    $leanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
-    if (-not $targetFramework -or -not $leanVersion) {
-        throw "The LEAN image does not declare lean_version and target_framework: $EngineImage"
+    if ([bool]$LeanVersion -ne [bool]$TargetFramework) {
+        throw "LeanVersion and TargetFramework must be supplied together."
+    }
+    if (-not $LeanVersion) {
+        $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
+        $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
+        $TargetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
+        $LeanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
+        if (-not $TargetFramework -or -not $LeanVersion) {
+            throw "The LEAN image does not declare lean_version and target_framework: $EngineImage"
+        }
     }
     $buildCacheState = Get-QmtWindowsBuildCacheState `
         -RepositoryPath $RepositoryPath `
         -ModuleRoot $ModuleRoot `
-        -LeanVersion $leanVersion `
-        -TargetFramework $targetFramework `
+        -LeanVersion $LeanVersion `
+        -TargetFramework $TargetFramework `
         -DotnetVersion $dotnetVersion
     if (-not $buildCacheState.IsBuildCacheHit) {
         Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=miss reason=$($buildCacheState.BuildCacheMissReason) fingerprint=$($buildCacheState.BuildFingerprint)"
@@ -129,6 +136,8 @@ try {
             -EngineImage $EngineImage `
             -ModuleRoot $ModuleRoot `
             -TaskPath "$TaskPath > ensure-build" `
+            -LeanVersion $LeanVersion `
+            -TargetFramework $TargetFramework `
             -EnsurePackage
         if ($LASTEXITCODE -ne 0) {
             throw "The shared QMT build and contract tests failed."
@@ -136,8 +145,8 @@ try {
         $buildCacheState = Get-QmtWindowsBuildCacheState `
             -RepositoryPath $RepositoryPath `
             -ModuleRoot $ModuleRoot `
-            -LeanVersion $leanVersion `
-            -TargetFramework $targetFramework `
+            -LeanVersion $LeanVersion `
+            -TargetFramework $TargetFramework `
             -DotnetVersion $dotnetVersion
         if (-not $buildCacheState.IsBuildCacheHit) {
             throw "The shared QMT build cache is still invalid: $($buildCacheState.BuildCacheMissReason)"

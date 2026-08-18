@@ -3,6 +3,8 @@ param(
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
     [string]$TaskPath = "test",
+    [string]$LeanVersion = "",
+    [string]$TargetFramework = "",
     [switch]$EnsurePackage
 )
 
@@ -91,26 +93,34 @@ function Invoke-WindowsTestCommand {
 Push-Location $RepositoryPath
 try {
     Write-WindowsTestLog "[qmt-task] $TaskPath"
-    $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
-    & $dockerExecutable image inspect $EngineImage 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=start action=pull image=$EngineImage"
-        & $dockerExecutable pull $EngineImage
+    if ([bool]$LeanVersion -ne [bool]$TargetFramework) {
+        throw "LeanVersion and TargetFramework must be supplied together."
+    }
+    if (-not $LeanVersion) {
+        $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
+        & $dockerExecutable image inspect $EngineImage 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            throw "Could not pull the default LEAN image $EngineImage."
+            Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=start action=pull image=$EngineImage"
+            & $dockerExecutable pull $EngineImage
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not pull the default LEAN image $EngineImage."
+            }
         }
-    }
 
-    $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
-    $targetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
-    $leanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
-    if (-not $targetFramework) {
-        throw "The default LEAN image does not declare target_framework: $EngineImage"
+        $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
+        $TargetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
+        $LeanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
+        if (-not $TargetFramework) {
+            throw "The default LEAN image does not declare target_framework: $EngineImage"
+        }
+        if (-not $LeanVersion) {
+            throw "The default LEAN image does not declare lean_version: $EngineImage"
+        }
+        Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok source=docker image=$EngineImage lean_version=$LeanVersion target_framework=$TargetFramework"
     }
-    if (-not $leanVersion) {
-        throw "The default LEAN image does not declare lean_version: $EngineImage"
+    else {
+        Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok source=explicit lean_version=$LeanVersion target_framework=$TargetFramework"
     }
-    Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok image=$EngineImage lean_version=$leanVersion target_framework=$targetFramework"
 
     if (-not $EnsurePackage) {
         $uvExecutable = (Get-Command uv -ErrorAction Stop).Source
@@ -151,8 +161,8 @@ try {
     $buildCacheState = Get-QmtWindowsBuildCacheState `
         -RepositoryPath $RepositoryPath `
         -ModuleRoot $ModuleRoot `
-        -LeanVersion $leanVersion `
-        -TargetFramework $targetFramework `
+        -LeanVersion $LeanVersion `
+        -TargetFramework $TargetFramework `
         -DotnetVersion $dotnetVersion
     $testProjectPath = $buildCacheState.TestProjectPath
 
@@ -172,8 +182,8 @@ try {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build-server status=ok"
 
         $dotnetBuildStartedAt = Get-Date
-        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion target_framework=$targetFramework project=$testProjectPath"
-        $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", $testProjectPath, "--configuration", "Release", "--nologo", "--verbosity", "minimal", "--disable-build-servers", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:TargetFramework=$targetFramework")
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=start dotnet=$dotnetVersion target_framework=$TargetFramework project=$testProjectPath"
+        $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("build", $testProjectPath, "--configuration", "Release", "--nologo", "--verbosity", "minimal", "--disable-build-servers", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:TargetFramework=$TargetFramework")
         if ($commandExitCode -ne 0) {
             Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=failed exit_code=$commandExitCode"
             throw ".NET build failed with exit code $commandExitCode."
@@ -186,7 +196,7 @@ try {
         Write-CurrentTask "csharp-tests"
         $dotnetTestsStartedAt = Get-Date
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
-        $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$targetFramework")
+        $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$TargetFramework")
         if ($commandExitCode -ne 0) {
             Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=failed exit_code=$commandExitCode"
             throw ".NET tests failed with exit code $commandExitCode."
