@@ -24,8 +24,7 @@ namespace QuantConnect.Brokerages.Qmt
             { "qmt-gateway-host", Config.Get("qmt-gateway-host", "127.0.0.1") },
             { "qmt-gateway-port", Config.Get("qmt-gateway-port", "17890") },
             { "qmt-account-id", Config.Get("qmt-account-id") },
-            { "qmt-request-timeout", Config.Get("qmt-request-timeout", "10") },
-            { "qmt-trading-enabled", Config.Get("qmt-trading-enabled", "false") }
+            { "qmt-request-timeout", Config.Get("qmt-request-timeout", "10") }
         };
 
         public override IBrokerageModel GetBrokerageModel(IOrderProvider orderProvider)
@@ -50,7 +49,6 @@ namespace QuantConnect.Brokerages.Qmt
             var port = Read<int>(job.BrokerageData, "qmt-gateway-port", errors);
             var accountId = Read<string>(job.BrokerageData, "qmt-account-id", errors);
             var requestTimeoutSeconds = Read<int>(job.BrokerageData, "qmt-request-timeout", errors);
-            var tradingEnabled = Read<bool>(job.BrokerageData, "qmt-trading-enabled", errors);
 
             if (requestTimeoutSeconds <= 0)
             {
@@ -69,8 +67,7 @@ namespace QuantConnect.Brokerages.Qmt
                 TimeSpan.FromSeconds(requestTimeoutSeconds));
             var brokerage = new QmtBrokerage(
                 gatewayClient,
-                algorithm.Transactions,
-                tradingEnabled);
+                algorithm.Transactions);
             Composer.Instance.AddPart<IDataQueueHandler>(brokerage);
             return brokerage;
         }

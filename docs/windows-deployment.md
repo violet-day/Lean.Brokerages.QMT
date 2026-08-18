@@ -41,7 +41,7 @@ make install-windows
 1. 验证 lean-cli `qmt` 分支能够识别 `QMT` Brokerage 和 data queue；
 2. 恢复 `quantconnect/lean:latest` 和 `quantconnect/research:latest` 默认镜像；
 3. 从现有 `lean.json` 生成隔离的 `C:\Users\nemo\lean_project\lean-qmt.json`，
-   加入 `live-qmt` environment，并强制 `qmt-trading-enabled=false`。
+   加入 `live-qmt` environment。
 
 账号只存在 Windows 本地 `lean-qmt.json`，不会写入 Git。原 `lean.json` 不会被覆盖。
 QMT DLL 直接挂载到默认 Engine 容器，不构建自定义镜像，也不生成 NuGet 包。
@@ -75,7 +75,7 @@ make test-smoke
 `make test-readonly` 直接构造真实 `QmtGatewayClient` 和 `QmtBrokerage`，
 验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、退订和主动断开后的
 连接重建。`make test-smoke` 独立运行完整 LEAN live smoke。两者都不验证自动故障恢复，
-并要求 Gateway 与 LEAN 两端交易开关均为关闭状态，不调用下单接口。
+测试代码只执行查询和行情订阅，不调用下单接口。
 精简证据由 Windows Nginx 暴露：
 
 ```text
@@ -97,7 +97,7 @@ lean-cli
 → clean exit
 ```
 
-`qmt-trading-enabled=false`，测试不下单，也不启动、停止或重启 QMT 客户端。
+测试不下单，也不启动、停止或重启 QMT 客户端。
 
 ## 只读真实部署
 
@@ -107,15 +107,10 @@ lean-cli
 ```python
 GATEWAY_BIND_HOST = "0.0.0.0"
 GATEWAY_ALLOW_REMOTE_CLIENTS = True
-TRADING_ENABLED = False
 ```
 
 协议当前是无 TLS、无认证的明文 TCP。必须用 Windows 防火墙只允许 Docker Desktop
-内部网络访问 17890，绝不能开放给局域网或公网。LEAN 端也必须保持：
-
-```json
-"qmt-trading-enabled": "false"
-```
+内部网络访问 17890，绝不能开放给局域网或公网。
 
 准备好 Gateway 后，命令形式为：
 
@@ -128,8 +123,7 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
   --detach
 ```
 
-先验证资金、持仓、未完成委托和实时行情。只有模拟账户交易闭环验收完成，并由用户
-明确决定后，才能同时打开 QMT 和 LEAN 两端交易开关。
+先验证资金、持仓、未完成委托和实时行情，再在确认当前 QMT 账号后显式运行交易测试。
 
 ## 常规验证与日志
 
@@ -146,9 +140,7 @@ make test-trading
 ```
 
 `make test-trading` 直接使用 Gateway `hello` 返回的当前 QMT 登录账号，账号由操作者
-自行确认。运行前需要手工将
-`lean-qmt.json` 的 `qmt-trading-enabled` 和 Gateway 的 `TRADING_ENABLED` 同时设为
-`true`，命令本身不会修改开关。测试固定使用 `600000.SH`、数量 `100`，根据最新行情
+自行确认。测试固定使用 `600000.SH`、数量 `100`，根据最新行情
 自动计算不易成交的买入限价。测试验证限价单提交、`Submitted`
 回调、撤单、`Canceled` 回调及最终订单查询；失败时按唯一 client ID 尝试撤销
 遗留委托。日志为：

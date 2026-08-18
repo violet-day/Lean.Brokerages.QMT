@@ -143,11 +143,10 @@ namespace QuantConnect.Brokerages.Qmt
                         QmtProtocol.Operations.Hello,
                         new QmtHelloRequest { AccountId = _expectedAccountId ?? string.Empty },
                         cancellationToken).ConfigureAwait(false);
-                    if (helloResponse.Payload.Property("account_id", StringComparison.Ordinal) == null ||
-                        helloResponse.Payload.Property("trading_enabled", StringComparison.Ordinal) == null)
+                    if (helloResponse.Payload.Property("account_id", StringComparison.Ordinal) == null)
                     {
                         throw new QmtGatewayProtocolException(
-                            "The QMT Gateway hello response must contain account_id and trading_enabled.");
+                            "The QMT Gateway hello response must contain account_id.");
                     }
 
                     var serverInformation = helloResponse.ToPayload<QmtHelloPayload>();
@@ -167,7 +166,7 @@ namespace QuantConnect.Brokerages.Qmt
                     Interlocked.Exchange(ref _isConnected, 1);
                     Log.Trace(
                         $"QmtGatewayClient.Connect(): stage=hello status=ok server={serverInformation.ServerName} " +
-                        $"account_id={serverInformation.AccountId} trading_enabled={serverInformation.TradingEnabled}");
+                        $"account_id={serverInformation.AccountId}");
                 }
                 catch
                 {

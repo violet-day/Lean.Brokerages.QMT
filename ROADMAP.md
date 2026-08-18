@@ -58,7 +58,7 @@ LEAN PlaceOrder
 
 - [x] ADR 固定协议 v1：单 TCP 连接、UTF-8 NDJSON。
 - [x] 定义 `protocol_version`、消息类型、request ID、operation、错误和 payload。
-- [x] `hello` 校验账号并返回 Gateway 的 `trading_enabled` 状态。
+- [x] `hello` 校验账号并返回 Gateway 名称与账号。
 - [x] 定义资金、持仓、委托查询消息。
 - [x] 定义 Market/Limit 下单和撤单消息。
 - [x] 定义行情订阅及以 `subscription_id` 退订。
@@ -75,7 +75,7 @@ LEAN PlaceOrder
 - [x] 从 Windows Git 工作区直接加载 `lean_qmt_gateway.py`，不依赖 `importlib`。
 - [x] Git 同步后自动热重载 Gateway；加载或初始化失败时保留/恢复旧版本。
 - [x] TCP 线程只收发和排队；QMT `handlebar` 线程执行 QMT API。
-- [x] 实现账号握手和默认关闭的交易开关。
+- [x] 实现账号握手。
 - [x] 实现 ACCOUNT、POSITION、ORDER 查询及字段归一化。
 - [x] 实现行情订阅、退订和 quote 事件。
 - [x] 实现 place/cancel 协议和 QMT 参数映射。
@@ -98,7 +98,6 @@ LEAN PlaceOrder
 - [x] 实现上海、深圳、北京 QMT 证券代码转换。
 - [x] 实现行情订阅/退订和 QMT tick 到 LEAN `Tick`。
 - [x] 将 order/deal callback 转成 LEAN `OrderEvent`。
-- [x] 本地与 Gateway 两个交易开关必须同时开启。
 - [x] 真实 QMT 只读 E2E 覆盖账户、持仓、委托、历史和行情订阅。
 - [x] 模拟账户交易 E2E 入口覆盖限价单提交、回调、撤单和最终订单查询。
 - [ ] 启动时自动完成资金、持仓和未完成委托对账。
@@ -112,22 +111,19 @@ LEAN PlaceOrder
 2. Windows 创建
    `C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\qmt_local_config.py`，
    来源为同目录的 `qmt_local_config.example.py`。
-3. 填写 `ACCOUNT_ID`，保持 `TRADING_ENABLED = False`。
+3. 填写 `ACCOUNT_ID`。
 4. 在大 QMT 策略编辑器中新建/打开策略，把 `qmt_gateway_entry.py` 全文复制进去。
    QMT 的模型导入窗口只认打包格式，不要用它导入源码目录。
 5. 用户手工选择账号并运行策略；自动化不得启动、停止或重启 QMT。
-6. 检查 `[lean_qmt_gateway] server_started ... trading_enabled=False`。
+6. 检查 `[lean_qmt_gateway] server_started ... bind_port=17890`。
 
 入口每 500ms 检查工作区内的 `lean_qmt_gateway.py`。Git 同步后会自动热重载，
 不再要求用户手工重新运行策略。旧入口升级到热重载入口时需要最后手工运行一次。
 
 ## 安全边界
 
-- [x] Python `TRADING_ENABLED` 默认 `False`。
-- [x] LEAN `qmt-trading-enabled` 默认 `false`。
-- [x] 任一开关关闭时，Brokerage 拒绝下单和撤单。
 - [x] `make test` 不修改真实配置，也不连接真实 Gateway。
-- [x] 真实 E2E 强制两个交易开关关闭，只执行查询和行情订阅。
+- [x] 只读 E2E 只执行查询和行情订阅，不调用下单接口。
 - [x] Gateway 默认仅监听 `127.0.0.1:17890`。
 - [ ] Docker 接入前配置受保护的非回环监听和最小范围 Windows 防火墙规则。
 - [ ] 实盘启用前确认端口未暴露公网；v1 是无 TLS、无认证的明文协议。
@@ -172,7 +168,7 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 ```text
 1. 用户手工登录大 QMT
 2. 用户手工运行 QMT Gateway 策略
-3. 验证 Gateway 账号、协议版本和 trading_enabled
+3. 验证 Gateway 账号和协议版本
 4. 将对应 LEAN 版本的本地 QMT DLL 挂载后执行 lean live deploy
 5. 验证资金、持仓、未完成委托和 China 行情
 6. 进入策略运行

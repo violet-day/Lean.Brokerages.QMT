@@ -31,7 +31,7 @@ function Write-DeploymentLog {
 }
 
 $currentStage = "lean-preflight"
-Write-DeploymentLog "stage=run status=start trading_enabled=false"
+Write-DeploymentLog "stage=run status=start operations=readonly"
 try {
 Write-DeploymentLog "stage=$currentStage status=start"
 $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
@@ -82,9 +82,6 @@ if ([string]$configuration."qmt-gateway-host" -ne "host.docker.internal") {
 }
 if ([int]$configuration."qmt-gateway-port" -ne $GatewayPort) {
     throw "qmt-gateway-port must be $GatewayPort."
-}
-if ([string]$configuration."qmt-trading-enabled" -ne "false") {
-    throw "qmt-trading-enabled must remain false for the live smoke."
 }
 $historyProviders = @($configuration.environments."live-qmt"."history-provider")
 if ($historyProviders -notcontains "BrokerageHistoryProvider") {
@@ -184,7 +181,7 @@ try {
         $subscriptionPassed = $containerLogText.Contains("QmtBrokerage.Subscribe(): status=ok symbol=600000")
         $algorithmInitializationPassed = $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
         $minuteBarPassed = $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
-        $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
+        $completed = $containerLogText.Contains("[qmt-e2e] stage=complete status=ok operations=readonly")
 
         if ($historyPassed -and $accountPassed -and $positionsPassed -and $ordersPassed -and $subscriptionPassed -and $algorithmInitializationPassed) {
             if ($minuteBarPassed -and $completed) {
@@ -213,7 +210,7 @@ try {
     }
     $algorithmInitializationPassed = $algorithmInitializationPassed -or $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
     $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
-    $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok trading=disabled")
+    $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok operations=readonly")
     [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
 }
 finally {
@@ -259,7 +256,7 @@ $outputUrl = if ($latestLiveOutputDirectory) {
 else {
     "http://192.168.50.135:8000/smoke_test/"
 }
-Write-DeploymentLog "stage=$currentStage status=ok image=$EngineImage history=ok account=ok positions=ok orders=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus trading_enabled=false output_url=$outputUrl"
+Write-DeploymentLog "stage=$currentStage status=ok image=$EngineImage history=ok account=ok positions=ok orders=ok subscription=ok algorithm_initialize=ok minute_bar=$minuteBarStatus operations=readonly output_url=$outputUrl"
 Write-DeploymentLog "stage=run status=ok log=http://192.168.50.135:8000/e2e/test-smoke.log"
 }
 catch {

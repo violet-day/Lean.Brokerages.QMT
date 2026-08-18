@@ -99,7 +99,6 @@ function New-QmtLeanConfiguration {
     $configuration | Add-Member -NotePropertyName "qmt-gateway-port" -NotePropertyValue ([string]$GatewayPort) -Force
     $configuration | Add-Member -NotePropertyName "qmt-account-id" -NotePropertyValue $AccountId -Force
     $configuration | Add-Member -NotePropertyName "qmt-request-timeout" -NotePropertyValue "60" -Force
-    $configuration | Add-Member -NotePropertyName "qmt-trading-enabled" -NotePropertyValue "false" -Force
 
     if (-not $configuration.PSObject.Properties["environments"]) {
         $configuration | Add-Member -NotePropertyName "environments" -NotePropertyValue ([pscustomobject]@{})
@@ -118,11 +117,7 @@ function New-QmtLeanConfiguration {
     $configuration.environments | Add-Member -NotePropertyName "live-qmt" -NotePropertyValue ([pscustomobject]$liveQmtEnvironment) -Force
 
     Save-Utf8Text -Path $qmtConfigurationPath -Content (($configuration | ConvertTo-Json -Depth 100) + "`n")
-    $writtenConfiguration = Get-Content -LiteralPath $qmtConfigurationPath -Raw | ConvertFrom-Json
-    if ([string]$writtenConfiguration."qmt-trading-enabled" -ne "false") {
-        throw "qmt-trading-enabled must remain false."
-    }
-    Write-DeploymentLog "stage=lean-config status=ok path=$qmtConfigurationPath trading_enabled=false"
+    Write-DeploymentLog "stage=lean-config status=ok path=$qmtConfigurationPath"
 }
 
 Confirm-QmtLeanCliIntegration

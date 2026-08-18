@@ -45,14 +45,12 @@ Immediately after opening TCP, the client sends:
 The server responds with:
 
 ```json
-{"protocol_version":1,"message_type":"response","request_id":"...","operation":"hello","success":true,"error_code":"","error_message":"","payload":{"server_name":"qmt-python-gateway","account_id":"86033767","trading_enabled":false}}
+{"protocol_version":1,"message_type":"response","request_id":"...","operation":"hello","success":true,"error_code":"","error_message":"","payload":{"server_name":"qmt-python-gateway","account_id":"86033767"}}
 ```
 
 An empty request `account_id` discovers the current Gateway account; the response
 must still contain a non-empty `account_id`. When the client supplies an expected
-account, it compares the returned value and aborts on mismatch. `trading_enabled`
-is authoritative: an order-capable client must refuse place/cancel operations when
-it is false. Trading defaults to disabled on the server.
+account, it compares the returned value and aborts on mismatch.
 
 The Gateway never starts, stops, logs into, or restarts QMT. An operator starts QMT and the imported Python strategy manually.
 
@@ -102,7 +100,6 @@ For `market`, `limit_price` is null/omitted. Response:
 
 The response payload may be empty. `success: true` means the cancel request was accepted for processing; final order state arrives through an `order` event.
 
-When trading is disabled, the Gateway returns `success: false`, `error_code: "TRADING_DISABLED"`, and a human-readable `error_message`. Real-QMT automated validation keeps both trading switches disabled and never invokes an order operation.
 
 ### Market data
 

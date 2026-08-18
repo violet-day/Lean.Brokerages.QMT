@@ -62,7 +62,7 @@ function Invoke-CapturedCommand {
 }
 
 $currentStage = "preflight"
-Write-E2EEvidence "[qmt-e2e] stage=run status=start trading=disabled"
+Write-E2EEvidence "[qmt-e2e] stage=run status=start operations=readonly"
 try {
     Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
@@ -73,15 +73,11 @@ try {
     if (-not $accountId) {
         throw "qmt-account-id is missing from $LeanConfigurationPath"
     }
-    if ([string]$configuration."qmt-trading-enabled" -ne "false") {
-        throw "qmt-trading-enabled must be false for the read-only E2E test."
-    }
-
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
-    Write-E2EEvidence "[qmt-e2e] stage=preflight status=ok gateway_port=$GatewayPort trading=disabled"
+    Write-E2EEvidence "[qmt-e2e] stage=preflight status=ok gateway_port=$GatewayPort operations=readonly"
 
     $currentStage = "build"
     Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
@@ -134,7 +130,7 @@ try {
         }
         throw "The real QMT read-only Brokerage E2E test failed."
     }
-    if (-not $testResult.Output.Contains("stage=complete status=ok trading=disabled")) {
+    if (-not $testResult.Output.Contains("stage=complete status=ok operations=readonly")) {
         throw "The QMT E2E completion evidence is missing."
     }
     Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=1"

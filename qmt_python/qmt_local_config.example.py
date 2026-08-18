@@ -19,6 +19,4 @@ GATEWAY_BIND_PORT = 17890
 # rejected unless this explicit opt-in is enabled and a firewall restricts it.
 GATEWAY_ALLOW_REMOTE_CLIENTS = False
 
-# Safety default. Do not enable until simulation-account validation is complete.
-TRADING_ENABLED = False
 GATEWAY_STRATEGY_NAME = "LeanQmtGateway"

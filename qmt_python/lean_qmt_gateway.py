@@ -155,7 +155,6 @@ def _load_config():
             config_value("GATEWAY_BIND_PORT", DEFAULT_BIND_PORT)
             or DEFAULT_BIND_PORT
         ),
-        "trading_enabled": bool(config_value("TRADING_ENABLED", False)),
         "strategy_name": str(
             config_value("GATEWAY_STRATEGY_NAME", DEFAULT_STRATEGY_NAME)
             or DEFAULT_STRATEGY_NAME
@@ -583,7 +582,6 @@ class LeanQmtGateway(object):
         unsubscribe_quote_function=None,
         bind_host=DEFAULT_BIND_HOST,
         bind_port=DEFAULT_BIND_PORT,
-        trading_enabled=False,
         strategy_name=DEFAULT_STRATEGY_NAME,
     ):
         self.context_info = context_info
@@ -598,7 +596,6 @@ class LeanQmtGateway(object):
         self.bind_host = str(bind_host or DEFAULT_BIND_HOST)
         self.bind_port = int(bind_port)
         self.bound_port = None
-        self.trading_enabled = bool(trading_enabled)
         self.strategy_name = str(strategy_name or DEFAULT_STRATEGY_NAME)
 
         self._incoming_messages = queue.Queue()
@@ -674,7 +671,6 @@ class LeanQmtGateway(object):
             "server_started",
             bind_host=self.bind_host,
             bind_port=self.bound_port,
-            trading_enabled=self.trading_enabled,
         )
 
     def recover_network_server_if_needed(self):
@@ -1085,7 +1081,6 @@ class LeanQmtGateway(object):
             return {
                 "server_name": "lean-qmt-gateway",
                 "account_id": self.account_id,
-                "trading_enabled": self.trading_enabled,
             }
         if operation == "query_account":
             return {
@@ -1250,11 +1245,6 @@ class LeanQmtGateway(object):
         return result_rows
 
     def _place_order(self, payload):
-        if not self.trading_enabled:
-            raise _RequestError(
-                "TRADING_DISABLED",
-                "Trading is disabled by QMT Gateway configuration.",
-            )
         if not callable(self.passorder_function):
             raise _RequestError("QMT_API_UNAVAILABLE", "passorder is unavailable.")
 
@@ -1325,11 +1315,6 @@ class LeanQmtGateway(object):
         }
 
     def _cancel_order(self, payload):
-        if not self.trading_enabled:
-            raise _RequestError(
-                "TRADING_DISABLED",
-                "Trading is disabled by QMT Gateway configuration.",
-            )
         if not callable(self.cancel_function):
             raise _RequestError("QMT_API_UNAVAILABLE", "cancel is unavailable.")
 
@@ -1506,7 +1491,6 @@ def init(
         account_configured=bool(account_id),
         bind_host=config["bind_host"],
         bind_port=config["bind_port"],
-        trading_enabled=config["trading_enabled"],
     )
     if not account_id:
         _log("account_missing", action="create_qmt_local_config.py")
@@ -1560,7 +1544,6 @@ def init(
         ),
         bind_host=config["bind_host"],
         bind_port=config["bind_port"],
-        trading_enabled=config["trading_enabled"],
         strategy_name=config["strategy_name"],
     )
     try:

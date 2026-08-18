@@ -54,14 +54,12 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 var algorithm = new QCAlgorithm();
                 _brokerage = new QmtBrokerage(
                     _gatewayClient,
-                    algorithm.Transactions,
-                    localTradingEnabled: false);
+                    algorithm.Transactions);
                 _brokerage.Connect();
 
                 Assert.That(_brokerage.IsConnected, Is.True);
                 Assert.That(_gatewayClient.ServerInformation?.AccountId, Is.EqualTo(accountId));
-                Assert.That(_gatewayClient.ServerInformation?.TradingEnabled, Is.False);
-                WriteEvidence(stage, "account_match=true trading_enabled=false");
+                WriteEvidence(stage, "account_match=true");
             }
             catch (Exception exception)
             {
@@ -81,7 +79,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         public async Task RunsReadOnlyBrokerageEndToEnd()
         {
             var currentStage = "account";
-            WriteEvidence("run", "trading=disabled", "start");
+            WriteEvidence("run", "operations=readonly", "start");
             try
             {
                 WriteEvidence(currentStage, "", "start");
@@ -173,7 +171,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 Assert.That(_brokerage.IsConnected, Is.True);
                 Assert.That(_brokerage.GetCashBalance(), Is.Not.Empty);
                 WriteEvidence(currentStage, "account_query=ok");
-                WriteEvidence("complete", "trading=disabled");
+                WriteEvidence("complete", "operations=readonly");
             }
             catch (Exception exception)
             {

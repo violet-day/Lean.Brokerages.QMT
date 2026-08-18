@@ -104,9 +104,6 @@ namespace QuantConnect.Brokerages.Qmt
 
         [JsonProperty("account_id")]
         public string AccountId { get; set; } = string.Empty;
-
-        [JsonProperty("trading_enabled")]
-        public bool TradingEnabled { get; set; }
     }
 
     public sealed class QmtQueryAccountPayload

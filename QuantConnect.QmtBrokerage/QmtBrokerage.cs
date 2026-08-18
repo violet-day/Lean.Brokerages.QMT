@@ -25,7 +25,6 @@ namespace QuantConnect.Brokerages.Qmt
     {
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
-        private readonly bool _localTradingEnabled;
         private readonly QmtSymbolMapper _symbolMapper;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
@@ -50,13 +49,11 @@ namespace QuantConnect.Brokerages.Qmt
         public QmtBrokerage(
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
-            bool localTradingEnabled,
             QmtSymbolMapper? symbolMapper = null)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
-            _localTradingEnabled = localTradingEnabled;
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
             AccountBaseCurrency = "CNY";
             _gatewayClient.EventReceived += HandleGatewayEvent;
@@ -66,13 +63,13 @@ namespace QuantConnect.Brokerages.Qmt
         public override void Connect()
         {
             ThrowIfDisposed();
-            Log.Trace($"QmtBrokerage.Connect(): stage=connect status=start local_trading_enabled={_localTradingEnabled}");
+            Log.Trace("QmtBrokerage.Connect(): stage=connect status=start");
             _gatewayClient.Connect();
             var serverInformation = _gatewayClient.ServerInformation ??
                 throw new QmtGatewayProtocolException("QMT Gateway connected without hello server information.");
             Log.Trace(
                 $"QmtBrokerage.Connect(): stage=connect status=ok account_id={serverInformation.AccountId} " +
-                $"local_trading_enabled={_localTradingEnabled} gateway_trading_enabled={serverInformation.TradingEnabled}");
+                $"server={serverInformation.ServerName}");
         }
 
         public override void Disconnect()
@@ -186,11 +183,6 @@ namespace QuantConnect.Brokerages.Qmt
                 throw new ArgumentNullException(nameof(order));
             }
 
-            if (!CanTrade("place_order"))
-            {
-                return false;
-            }
-
             if (order.SecurityType != SecurityType.Equity ||
                 (order.Type != OrderType.Market && order.Type != OrderType.Limit) ||
                 order.Quantity == 0 || order.Quantity != decimal.Truncate(order.Quantity))
@@ -257,11 +249,6 @@ namespace QuantConnect.Brokerages.Qmt
             if (order == null)
             {
                 throw new ArgumentNullException(nameof(order));
-            }
-
-            if (!CanTrade("cancel_order"))
-            {
-                return false;
             }
 
             var nativeOrderId = order.BrokerId.FirstOrDefault();
@@ -649,30 +636,6 @@ namespace QuantConnect.Brokerages.Qmt
             Log.Trace(
                 $"QmtBrokerage.RegisterNativeOrderId(): status=ok lean_order_id={leanOrderId} " +
                 $"native_order_id={nativeOrderId}");
-        }
-
-        private bool CanTrade(string operation)
-        {
-            if (!IsConnected)
-            {
-                OnMessage(BrokerageMessageEvent.Disconnected($"Cannot execute {operation}: QMT Gateway is disconnected."));
-                return false;
-            }
-
-            var gatewayTradingEnabled = _gatewayClient.ServerInformation?.TradingEnabled == true;
-            if (_localTradingEnabled && gatewayTradingEnabled)
-            {
-                return true;
-            }
-
-            Log.Trace(
-                $"QmtBrokerage.CanTrade(): status=blocked operation={operation} local_trading_enabled={_localTradingEnabled} " +
-                $"gateway_trading_enabled={gatewayTradingEnabled}");
-            OnMessage(new BrokerageMessageEvent(
-                BrokerageMessageType.Warning,
-                "TradingDisabled",
-                "QMT trading is disabled. Both qmt-trading-enabled and the Gateway trading flag must be true."));
-            return false;
         }
 
         private static bool CanSubscribe(SubscriptionDataConfig dataConfig)

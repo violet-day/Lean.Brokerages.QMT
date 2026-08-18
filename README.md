@@ -26,8 +26,7 @@ Implemented and validated by contract tests and real-QMT read-only E2E:
 - tick subscriptions and quote conversion to LEAN data;
 - QMT order/deal callbacks converted to LEAN `OrderEvent` instances;
 - `QmtBrokerageFactory`, `QmtBrokerageModel`, `QmtBrokerage`, and the shared
-  `IDataQueueHandler` instance;
-- two independent trading switches, both disabled by default.
+  `IDataQueueHandler` instance.
 
 Not yet production-ready:
 
@@ -202,8 +201,7 @@ repository scripts do not start, stop, restart, or operate the QMT client.
    Copy-Item qmt_python\qmt_local_config.example.py qmt_python\qmt_local_config.py
    ```
 
-3. Set `ACCOUNT_ID` in `qmt_python\qmt_local_config.py`. Leave
-   `TRADING_ENABLED = False` for read-only and automated validation.
+3. Set `ACCOUNT_ID` in `qmt_python\qmt_local_config.py`.
 4. In the Big QMT strategy editor, create/open a strategy and copy the complete
    contents of `qmt_python\qmt_gateway_entry.py` into it once. The QMT model
    import dialog accepts packaged strategy files, so do not try to import this
@@ -213,7 +211,7 @@ repository scripts do not start, stop, restart, or operate the QMT client.
 
    ```text
    [lean_qmt_gateway] init_start ...
-   [lean_qmt_gateway] server_started bind_host=127.0.0.1 bind_port=17890 trading_enabled=False
+   [lean_qmt_gateway] server_started bind_host=127.0.0.1 bind_port=17890
    [lean_qmt_gateway] init_complete ...
    ```
 
@@ -232,19 +230,11 @@ on Windows. A Docker deployment will require a protected non-loopback binding,
 The protocol is plaintext and unauthenticated; port `17890` must never be
 exposed to the public Internet.
 
-## Trading safety
+## Trading validation
 
-Trading requires both of these settings to be explicitly enabled:
-
-```text
-QMT qmt_local_config.py: TRADING_ENABLED = True
-LEAN config:             qmt-trading-enabled = true
-```
-
-If either is false, `PlaceOrder()` and `CancelOrder()` are blocked. Keep both
-false until real-QMT read-only validation and the simulated-account checklist
-in ROADMAP.md have passed. Enabling either setting is an operator decision and
-is never part of `make test`.
+The Gateway and Brokerage do not have trading-enable configuration switches.
+When connected to QMT, calls to `PlaceOrder()` and `CancelOrder()` are sent to
+the configured account. The read-only tests never call either operation.
 
 The explicit order/cancel test against the current QMT Gateway account is:
 
@@ -255,13 +245,11 @@ make test-trading
 The command is fixed to `600000.SH` and `100` shares. It obtains the current
 account ID directly from the Gateway handshake and calculates a non-marketable
 limit price from the latest quote. The operator is responsible for the account
-currently logged into QMT. It refuses to run unless `qmt-trading-enabled=true`
-and the running Gateway reports `TRADING_ENABLED=True`. It places one limit
-order, requires the `Submitted` callback, cancels it, requires the `Canceled`
-callback, and confirms the final state through `query_orders`. On failure it
-queries by the unique test
+currently logged into QMT. It places one limit order, requires the `Submitted`
+callback, cancels it, requires the `Canceled` callback, and confirms the final
+state through `query_orders`. On failure it queries by the unique test
 client ID and attempts to cancel any remaining open order. It does not modify
-either trading switch. Its concise Windows log is:
+Gateway or LEAN configuration. Its concise Windows log is:
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log

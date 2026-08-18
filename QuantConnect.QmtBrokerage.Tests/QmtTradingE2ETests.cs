@@ -56,22 +56,16 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     TimeSpan.FromSeconds(10));
                 _brokerage = new QmtBrokerage(
                     _gatewayClient,
-                    _orderProvider,
-                    localTradingEnabled: true);
+                    _orderProvider);
                 _brokerage.Connect();
 
                 Assert.That(_brokerage.IsConnected, Is.True);
                 var accountId = _gatewayClient.ServerInformation?.AccountId;
                 Assert.That(accountId, Is.Not.Null.And.Not.Empty);
-                Assert.That(
-                    _gatewayClient.ServerInformation?.TradingEnabled,
-                    Is.True,
-                    "The QMT Gateway TRADING_ENABLED flag must be true for this explicit test.");
                 WriteEvidence(
                     stage,
                     "ok",
-                    $"account_id={accountId} account_source=gateway_hello " +
-                    $"local_trading_enabled=true gateway_trading_enabled=true");
+                    $"account_id={accountId} account_source=gateway_hello");
             }
             catch (Exception exception)
             {

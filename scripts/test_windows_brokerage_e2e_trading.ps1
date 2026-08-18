@@ -67,15 +67,11 @@ try {
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
         throw "The QMT LEAN configuration is missing: $LeanConfigurationPath"
     }
-    $configuration = Get-Content -LiteralPath $LeanConfigurationPath -Raw | ConvertFrom-Json
-    if ([string]$configuration."qmt-trading-enabled" -ne "true") {
-        throw "qmt-trading-enabled must be true for the trading test."
-    }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok lean_trading_enabled=true gateway_port=$GatewayPort"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort"
 
     $currentStage = "build"
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"

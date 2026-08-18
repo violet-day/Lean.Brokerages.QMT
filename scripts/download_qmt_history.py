@@ -328,8 +328,7 @@ def main():
             write_evidence(
                 current_stage,
                 "ok",
-                "account_discovered=true trading_enabled=%s"
-                % str(bool(hello_payload.get("trading_enabled"))).lower(),
+                "account_discovered=true",
             )
 
             current_stage = "query-history"
