@@ -6,7 +6,7 @@ export QMT_ROOT_TASK
 
 task_path = $(if $(filter $(1),$(QMT_ROOT_TASK)),$(QMT_ROOT_TASK),$(QMT_ROOT_TASK) > $(1))
 
-.PHONY: sync-windows install-windows package-windows test test-readonly test-smoke test-trading
+.PHONY: sync-windows package-windows test test-readonly test-smoke test-trading
 
 test:
 	@echo '[qmt-task] $(call task_path,test)'
@@ -16,9 +16,6 @@ test:
 
 sync-windows:
 	@QMT_TASK_PATH='$(call task_path,sync-windows)' ./scripts/sync_worktree_to_windows.sh
-
-install-windows:
-	@QMT_TASK_PATH='$(call task_path,install-windows)' ./scripts/run_windows_deployment.sh install
 
 package-windows:
 	@echo '[qmt-task] $(call task_path,package-windows)'

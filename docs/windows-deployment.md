@@ -28,24 +28,6 @@ C:\Users\nemo\lean_project               策略根目录
 QMT 使用 Windows 的 .NET 10 SDK 编译。目标框架和模块版本从默认 Engine 镜像标签
 动态读取，不把版本写死在 Makefile。
 
-## 一次性安装
-
-从 Mac 的本仓库执行：
-
-```bash
-make install-windows
-```
-
-安装脚本是幂等的，完成三件事：
-
-1. 验证 lean-cli `qmt` 分支能够识别 `QMT` Brokerage 和 data queue；
-2. 恢复 `quantconnect/lean:latest` 和 `quantconnect/research:latest` 默认镜像；
-3. 从现有 `lean.json` 生成隔离的 `C:\Users\nemo\lean_project\lean-qmt.json`，
-   加入 `live-qmt` environment。
-
-账号只存在 Windows 本地 `lean-qmt.json`，不会写入 Git。原 `lean.json` 不会被覆盖。
-QMT DLL 直接挂载到默认 Engine 容器，不构建自定义镜像，也不生成 NuGet 包。
-
 ## 编译和发布本地 Brokerage
 
 首次运行 Docker Desktop 时，需要用户本人在 RDP 会话中接受 Docker Desktop
@@ -132,7 +114,7 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
 
 ```bash
 make sync-windows    # 仅通过 Git 同步已提交分支
-make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
+make package-windows # 同步并确保当前代码对应的已验证 DLL 已发布
 make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-readonly   # 只跑真实 Brokerage 非交易 E2E
 make test-smoke      # 只跑完整 LEAN live smoke
@@ -154,7 +136,8 @@ http://192.168.50.135:8000/e2e/test-trading.log
 ```text
 .test-logs/windows-test.log
 .test-logs/windows-test-full.log
-.test-logs/windows-deployment-install.log
+.test-logs/windows-package.log
+.test-logs/windows-package-full.log
 .test-logs/windows-deployment-test.log
 .test-logs/windows-live-test.log
 ```

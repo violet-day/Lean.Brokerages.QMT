@@ -178,7 +178,7 @@ lean-cli 是 Python 项目，不需要“编译 lean-cli 的 C#”。账号和�
 
 ```bash
 make sync-windows    # 仅通过 Git 同步已提交分支
-make install-windows # 一次性配置 lean-cli 和 lean-qmt.json
+make package-windows # 同步并确保当前代码对应的已验证 DLL 已发布
 make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-readonly   # 只跑真实 Brokerage 非交易 E2E
 make test-smoke      # 只跑完整 LEAN live smoke
