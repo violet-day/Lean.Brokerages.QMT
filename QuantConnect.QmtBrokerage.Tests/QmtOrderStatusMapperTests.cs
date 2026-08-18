@@ -16,7 +16,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         [TestCase(55, OrderStatus.PartiallyFilled)]
         [TestCase(56, OrderStatus.Filled)]
         [TestCase(57, OrderStatus.Invalid)]
-        [TestCase(86, OrderStatus.Submitted)]
+        [TestCase(86, OrderStatus.None)]
         [TestCase(255, OrderStatus.None)]
         [TestCase(999, OrderStatus.None)]
         public void MapsQmtOrderStatusToLeanOrderStatus(int qmtOrderStatus, OrderStatus expectedLeanOrderStatus)

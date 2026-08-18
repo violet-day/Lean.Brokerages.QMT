@@ -21,7 +21,6 @@ namespace QuantConnect.Brokerages.Qmt
                 55 => OrderStatus.PartiallyFilled,
                 56 => OrderStatus.Filled,
                 57 => OrderStatus.Invalid,
-                86 => OrderStatus.Submitted,
                 255 => OrderStatus.None,
                 _ => OrderStatus.None
             };

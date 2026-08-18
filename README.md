@@ -38,6 +38,8 @@ Not yet production-ready:
 
 The protocol contract is recorded in
 [`docs/adr/0001-qmt-gateway-protocol.md`](docs/adr/0001-qmt-gateway-protocol.md).
+The request/order state split and QMT status mapping are recorded in
+[`docs/adr/0002-order-request-and-status-lifecycle.md`](docs/adr/0002-order-request-and-status-lifecycle.md).
 The remaining deployment work is tracked in [ROADMAP.md](ROADMAP.md).
 
 QMT is the Brokerage name, not the LEAN market ID. Add China equities with:

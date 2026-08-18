@@ -219,6 +219,18 @@ namespace QuantConnect.Brokerages.Qmt
         [JsonProperty("remark")]
         public string Remark { get; set; } = string.Empty;
 
+        [JsonProperty("submit_status")]
+        public int SubmitStatus { get; set; } = -1;
+
+        [JsonProperty("error_id")]
+        public int ErrorId { get; set; }
+
+        [JsonProperty("error_message")]
+        public string ErrorMessage { get; set; } = string.Empty;
+
+        [JsonProperty("cancel_information")]
+        public string CancelInformation { get; set; } = string.Empty;
+
         [JsonProperty("time")]
         public string Time { get; set; } = string.Empty;
     }
@@ -261,6 +273,15 @@ namespace QuantConnect.Brokerages.Qmt
 
     public sealed class QmtCancelOrderRequest
     {
+        [JsonProperty("order_id")]
+        public string OrderId { get; set; } = string.Empty;
+    }
+
+    public sealed class QmtCancelOrderPayload
+    {
+        [JsonProperty("canceled")]
+        public bool Canceled { get; set; }
+
         [JsonProperty("order_id")]
         public string OrderId { get; set; } = string.Empty;
     }

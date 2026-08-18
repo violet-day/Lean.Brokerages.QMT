@@ -92,14 +92,25 @@ For `market`, `limit_price` is null/omitted. Response:
 {"accepted":true,"client_order_id":"42","native_order_id":"123"}
 ```
 
+`accepted: true` means the Gateway validated the request and invoked Big QMT's
+`passorder` function without a synchronous error. `passorder` has no return
+value, so final QMT acceptance or rejection arrives through an `order` event.
+
 `cancel_order` request:
 
 ```json
 {"order_id":"123"}
 ```
 
-The response payload may be empty. `success: true` means the cancel request was accepted for processing; final order state arrives through an `order` event.
+Response payload:
 
+```json
+{"canceled":true,"order_id":"123"}
+```
+
+`success: true` means the Gateway operation completed. `canceled` is the QMT
+`cancel` return value and says whether QMT emitted the cancellation signal.
+Final order state arrives through an `order` event.
 
 ### Market data
 
@@ -142,7 +153,7 @@ Representative quote payload:
 Representative order payload:
 
 ```json
-{"stock_code":"600000.SH","order_id":"123","client_order_id":"42","status":55,"direction":"buy","order_type":"limit","original_volume":100,"traded_volume":50,"limit_price":10.00,"traded_price":9.99,"remark":"","time":"2026-08-13T09:31:00+08:00"}
+{"stock_code":"600000.SH","order_id":"123","client_order_id":"42","status":55,"submit_status":51,"error_id":0,"error_message":"","cancel_information":"","direction":"buy","order_type":"limit","original_volume":100,"traded_volume":50,"limit_price":10.00,"traded_price":9.99,"remark":"42","time":"2026-08-13T09:31:00+08:00"}
 ```
 
 Representative deal payload:

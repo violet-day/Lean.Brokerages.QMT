@@ -263,13 +263,21 @@ namespace QuantConnect.Brokerages.Qmt
 
             try
             {
-                SendRequest(
+                var response = SendRequest(
                     QmtProtocol.Operations.CancelOrder,
                     new QmtCancelOrderRequest { OrderId = nativeOrderId });
-                var canceled = true;
+                var result = response.ToPayload<QmtCancelOrderPayload>();
+                var canceled = result.Canceled;
                 Log.Trace(
                     $"QmtBrokerage.CancelOrder(): status={(canceled ? "ok" : "rejected")} " +
                     $"lean_order_id={order.Id} native_order_id={nativeOrderId}");
+                if (!canceled)
+                {
+                    OnMessage(new BrokerageMessageEvent(
+                        BrokerageMessageType.Warning,
+                        "CancelRejected",
+                        $"QMT did not submit the cancellation for LEAN order {order.Id}."));
+                }
                 return canceled;
             }
             catch (Exception exception)
@@ -486,7 +494,37 @@ namespace QuantConnect.Brokerages.Qmt
                 QmtSymbolMapper.MarketName);
             var direction = leanOrder?.Direction ?? ParseDirection(orderUpdate.Direction);
             var status = QmtOrderStatusMapper.GetLeanOrderStatus(orderUpdate.Status);
-            if (status == OrderStatus.PartiallyFilled || status == OrderStatus.Filled || status == OrderStatus.None)
+            var orderMessage = GetOrderEventMessage(orderUpdate);
+            if (status == OrderStatus.None && orderUpdate.SubmitStatus == 52)
+            {
+                status = OrderStatus.Invalid;
+                Log.Trace(
+                    $"QmtBrokerage.HandleOrder(): status=order_rejected_from_submit_status " +
+                    $"lean_order_id={leanOrderId.Value} native_order_id={orderUpdate.OrderId} " +
+                    $"qmt_order_status={orderUpdate.Status} qmt_submit_status={orderUpdate.SubmitStatus} " +
+                    $"error_id={orderUpdate.ErrorId}");
+            }
+            else if (status == OrderStatus.None)
+            {
+                Log.Error(
+                    $"QmtBrokerage.HandleOrder(): status=unsupported_qmt_order_status " +
+                    $"lean_order_id={leanOrderId.Value} native_order_id={orderUpdate.OrderId} " +
+                    $"client_order_id={orderUpdate.ClientOrderId} qmt_order_status={orderUpdate.Status} " +
+                    $"qmt_submit_status={orderUpdate.SubmitStatus} error_id={orderUpdate.ErrorId}");
+                ProcessPendingDeals(orderUpdate.OrderId);
+                return;
+            }
+
+            if (orderUpdate.SubmitStatus == 53 || orderUpdate.SubmitStatus == 54)
+            {
+                var requestName = orderUpdate.SubmitStatus == 53 ? "cancellation" : "update";
+                OnMessage(new BrokerageMessageEvent(
+                    BrokerageMessageType.Warning,
+                    orderUpdate.SubmitStatus == 53 ? "CancelRejected" : "UpdateRejected",
+                    $"QMT rejected the {requestName} for LEAN order {leanOrderId.Value}: {orderMessage}"));
+            }
+
+            if (status == OrderStatus.PartiallyFilled || status == OrderStatus.Filled)
             {
                 ProcessPendingDeals(orderUpdate.OrderId);
                 Log.Trace(
@@ -503,7 +541,7 @@ namespace QuantConnect.Brokerages.Qmt
                 0m,
                 0m,
                 OrderFee.Zero,
-                orderUpdate.Remark));
+                orderMessage));
             Log.Trace(
                 $"QmtBrokerage.HandleOrder(): status=ok lean_order_id={leanOrderId.Value} " +
                 $"native_order_id={orderUpdate.OrderId} order_status={status}");
@@ -650,6 +688,21 @@ namespace QuantConnect.Brokerages.Qmt
             return string.Equals(direction, "sell", StringComparison.OrdinalIgnoreCase)
                 ? OrderDirection.Sell
                 : OrderDirection.Buy;
+        }
+
+        private static string GetOrderEventMessage(QmtOrderEventPayload orderUpdate)
+        {
+            var statusInformation = !string.IsNullOrWhiteSpace(orderUpdate.CancelInformation)
+                ? orderUpdate.CancelInformation.Trim()
+                : orderUpdate.ErrorMessage?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(statusInformation))
+            {
+                return orderUpdate.Remark;
+            }
+
+            return orderUpdate.ErrorId == 0
+                ? statusInformation
+                : $"QMT error {orderUpdate.ErrorId}: {statusInformation}";
         }
 
         private static DateTime ParseQmtTime(string value)

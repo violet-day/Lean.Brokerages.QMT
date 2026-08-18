@@ -335,6 +335,30 @@ def _normalize_order(order_info):
         "traded_price": _number(
             _attribute(order_info, ("m_dTradedPrice", "traded_price"), 0)
         ),
+        "submit_status": _integer(
+            _attribute(
+                order_info,
+                ("m_nOrderSubmitStatus", "submit_status"),
+                -1,
+            ),
+            -1,
+        ),
+        "error_id": _integer(
+            _attribute(order_info, ("m_nErrorID", "error_id"), 0),
+            0,
+        ),
+        "error_message": str(
+            _attribute(order_info, ("m_strErrorMsg", "error_message"), "")
+            or ""
+        ),
+        "cancel_information": str(
+            _attribute(
+                order_info,
+                ("m_strCancelInfo", "cancel_information"),
+                "",
+            )
+            or ""
+        ),
         "remark": remark,
         "time": timestamp,
     }
@@ -814,12 +838,17 @@ class LeanQmtGateway(object):
 
     def order_error_callback(self, order_args, error_message):
         payload = _normalize_order(order_args)
-        payload["error_message"] = str(error_message or "")
+        callback_error_message = str(error_message or "").strip()
+        if callback_error_message:
+            payload["error_message"] = callback_error_message
         self._publish_event("order", payload)
         _log(
             "order_error_event",
-            error_message=str(error_message or ""),
+            error_id=payload["error_id"],
+            error_message=payload["error_message"],
             order_id=payload["order_id"],
+            status=payload["status"],
+            submit_status=payload["submit_status"],
         )
 
     def enqueue_received_message(self, client_socket, request_message):
