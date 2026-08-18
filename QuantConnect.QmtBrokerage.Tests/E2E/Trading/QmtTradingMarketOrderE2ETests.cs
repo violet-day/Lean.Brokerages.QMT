@@ -59,7 +59,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
                 _context.WriteStage(
                     "market-order",
                     "ok",
-                    $"request_accepted={requestAccepted.ToString().ToLowerInvariant()} final_status=Invalid");
+                    $"request_accepted={requestAccepted.ToString().ToLowerInvariant()} " +
+                    $"final_status={(requestAccepted ? "Invalid" : "RejectedBeforeGateway")}");
             });
         }
 

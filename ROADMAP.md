@@ -144,7 +144,7 @@ LEAN PlaceOrder
 - [x] 在 lean-cli `qmt` 分支注册 QMT Brokerage。
 - [x] 配置 `live-mode-brokerage = QmtBrokerage`。
 - [x] 配置 `data-queue-handler = QmtBrokerage`。
-- [x] 增加 Gateway host、port、account ID、timeout、MarketOrder style 和 trading-enabled 配置。
+- [x] 增加 Gateway host、port、account ID、timeout、交易环境、MarketOrder style 和 trading-enabled 配置。
 - [x] 在隔离的 Windows `lean-qmt.json` 增加 `live-qmt` environment。
 - [x] 固定 lean-cli `qmt` 分支并用 editable 安装。
 - [ ] 验证 `lean live deploy` 生成的 `config.json` 和镜像参数。

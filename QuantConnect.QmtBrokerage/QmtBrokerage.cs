@@ -27,6 +27,7 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
         private readonly QmtMarketOrderStyle _marketOrderStyle;
+        private readonly QmtTradingEnvironment _tradingEnvironment;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
@@ -51,13 +52,15 @@ namespace QuantConnect.Brokerages.Qmt
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
             QmtSymbolMapper? symbolMapper = null,
-            QmtMarketOrderStyle marketOrderStyle = QmtMarketOrderStyle.LatestPrice)
+            QmtMarketOrderStyle marketOrderStyle = QmtMarketOrderStyle.LatestPrice,
+            QmtTradingEnvironment tradingEnvironment = QmtTradingEnvironment.Live)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
             _marketOrderStyle = marketOrderStyle;
+            _tradingEnvironment = tradingEnvironment;
             AccountBaseCurrency = "CNY";
             _gatewayClient.EventReceived += HandleGatewayEvent;
             _gatewayClient.Disconnected += HandleGatewayDisconnected;
@@ -194,6 +197,20 @@ namespace QuantConnect.Brokerages.Qmt
                     BrokerageMessageType.Warning,
                     "UnsupportedOrder",
                     "QMT MVP accepts only whole-share A-share Market and Limit orders."));
+                return false;
+            }
+
+            var utcTime = DateTime.UtcNow;
+            if (!QmtTradingEnvironmentResolver.IsOrderSubmissionAllowed(_tradingEnvironment, utcTime))
+            {
+                var chinaTime = utcTime.ConvertFromUtc(TimeZones.Shanghai);
+                Log.Trace(
+                    $"QmtBrokerage.PlaceOrder(): status=market-closed lean_order_id={order.Id} " +
+                    $"trading_environment=simulation china_time={chinaTime:O}");
+                OnMessage(new BrokerageMessageEvent(
+                    BrokerageMessageType.Warning,
+                    "MarketClosed",
+                    "The QMT simulation account accepts orders only on weekdays from 10:00 to 17:00 Asia/Shanghai."));
                 return false;
             }
 

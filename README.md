@@ -56,13 +56,19 @@ Select the QMT execution style once in `lean-qmt.json`; strategy calls remain
 ordinary LEAN `MarketOrder` calls:
 
 ```json
-"qmt-market-order-style": "latest-price"
+{
+  "qmt-trading-environment": "simulation",
+  "qmt-market-order-style": "latest-price"
+}
 ```
 
 `latest-price` maps to QMT price type `5` and is the simulation-account
 compatible default. It is not an exchange-native market order. For a live
-account, `five-level-immediate-or-cancel` maps to `42` on Shanghai/Beijing and
-`47` on Shenzhen. Other explicit values are
+account, set `qmt-trading-environment` to `live`;
+`five-level-immediate-or-cancel` then maps to `42` on Shanghai/Beijing and `47`
+on Shenzhen. Simulation mode rejects orders outside its weekday 10:00–17:00
+session before calling QMT because `passorder` otherwise drops them without an
+order or rejection callback. Other explicit style values are
 `five-level-immediate-to-limit`, `counterparty-best`, `own-best`,
 `immediate-or-cancel`, and `fill-or-kill`; unsupported exchange combinations
 are rejected before the Gateway is called. QMT documents native stock market

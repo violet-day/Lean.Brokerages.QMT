@@ -85,7 +85,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 var brokerage = new QmtBrokerage(
                     gatewayClient,
                     orderProvider,
-                    marketOrderStyle: marketOrderStyle);
+                    marketOrderStyle: marketOrderStyle,
+                    tradingEnvironment: QmtTradingEnvironment.Simulation);
                 context = new QmtTradingTestContext(
                     algorithm,
                     orderProvider,
@@ -99,7 +100,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                     stage,
                     "ok",
                     $"account_id={expectedAccountId} account_match=true " +
-                    $"market_order_style={QmtMarketOrderStyleResolver.GetConfigurationValue(marketOrderStyle)}");
+                    $"market_order_style={QmtMarketOrderStyleResolver.GetConfigurationValue(marketOrderStyle)} " +
+                    "trading_environment=simulation");
                 return context;
             }
             catch (Exception exception)

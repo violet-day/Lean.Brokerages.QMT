@@ -30,6 +30,12 @@ namespace QuantConnect.Brokerages.Qmt
                 Config.Get(
                     "qmt-market-order-style",
                     QmtMarketOrderStyleResolver.LatestPriceConfigurationValue)
+            },
+            {
+                "qmt-trading-environment",
+                Config.Get(
+                    "qmt-trading-environment",
+                    QmtTradingEnvironmentResolver.LiveConfigurationValue)
             }
         };
 
@@ -57,6 +63,8 @@ namespace QuantConnect.Brokerages.Qmt
             var requestTimeoutSeconds = Read<int>(job.BrokerageData, "qmt-request-timeout", errors);
             var marketOrderStyleText = Read<string>(job.BrokerageData, "qmt-market-order-style", errors);
             var marketOrderStyle = QmtMarketOrderStyle.LatestPrice;
+            var tradingEnvironmentText = Read<string>(job.BrokerageData, "qmt-trading-environment", errors);
+            var tradingEnvironment = QmtTradingEnvironment.Live;
 
             if (requestTimeoutSeconds <= 0)
             {
@@ -68,6 +76,12 @@ namespace QuantConnect.Brokerages.Qmt
                     $"qmt-market-order-style '{marketOrderStyleText}' is invalid. " +
                     "Use latest-price, five-level-immediate-or-cancel, five-level-immediate-to-limit, " +
                     "counterparty-best, own-best, immediate-or-cancel, or fill-or-kill.");
+            }
+            if (!QmtTradingEnvironmentResolver.TryParse(tradingEnvironmentText, out tradingEnvironment))
+            {
+                errors.Add(
+                    $"qmt-trading-environment '{tradingEnvironmentText}' is invalid. " +
+                    "Use live or simulation.");
             }
 
             if (errors.Count != 0)
@@ -83,7 +97,8 @@ namespace QuantConnect.Brokerages.Qmt
             var brokerage = new QmtBrokerage(
                 gatewayClient,
                 algorithm.Transactions,
-                marketOrderStyle: marketOrderStyle);
+                marketOrderStyle: marketOrderStyle,
+                tradingEnvironment: tradingEnvironment);
             Composer.Instance.AddPart<IDataQueueHandler>(brokerage);
             return brokerage;
         }

@@ -72,7 +72,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
                 _context.WriteStage(
                     "outside-session-order",
                     "ok",
-                    $"request_accepted={requestAccepted.ToString().ToLowerInvariant()} final_status=Invalid open_order=false");
+                    $"request_accepted={requestAccepted.ToString().ToLowerInvariant()} " +
+                    $"final_status={(requestAccepted ? "Invalid" : "RejectedBeforeGateway")} open_order=false");
             });
         }
     }
