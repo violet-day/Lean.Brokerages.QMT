@@ -31,24 +31,31 @@ function Get-QmtWindowsBuildCacheState {
         throw "Could not inspect the Windows LEAN worktree: $leanRepositoryPath"
     }
 
-    Push-Location $RepositoryPath
-    try {
-        $trackedBuildInputs = @(& $gitExecutable ls-files -s -- "QuantConnect.QmtBrokerage" "QuantConnect.QmtBrokerage.Tests" "global.json")
-        if ($LASTEXITCODE -ne 0 -or $trackedBuildInputs.Count -eq 0) {
-            throw "Could not determine the tracked QMT build inputs."
-        }
+    $repositoryRootPath = [System.IO.Path]::GetFullPath($RepositoryPath).TrimEnd("\") + "\"
+    $buildInputFiles = @(
+        Get-ChildItem -LiteralPath (Join-Path $RepositoryPath "QuantConnect.QmtBrokerage") -Recurse -File
+        Get-ChildItem -LiteralPath (Join-Path $RepositoryPath "QuantConnect.QmtBrokerage.Tests") -Recurse -File
+        Get-Item -LiteralPath (Join-Path $RepositoryPath "global.json")
+    ) | Where-Object {
+        $relativePath = $_.FullName.Substring($repositoryRootPath.Length).Replace("\", "/")
+        $relativePath -notmatch "(^|/)(bin|obj)/"
+    } | Sort-Object FullName
+    if ($buildInputFiles.Count -eq 0) {
+        throw "Could not determine the current QMT build inputs."
     }
-    finally {
-        Pop-Location
-    }
+    $currentBuildInputs = @($buildInputFiles | ForEach-Object {
+        $relativePath = $_.FullName.Substring($repositoryRootPath.Length).Replace("\", "/")
+        $contentHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        "$relativePath=$contentHash"
+    })
 
     $buildFingerprintInput = @(
-        "schema_version=1"
+        "schema_version=2"
         "lean_commit=$leanCommit"
         "lean_version=$LeanVersion"
         "target_framework=$TargetFramework"
         "dotnet_version=$DotnetVersion"
-        $trackedBuildInputs
+        $currentBuildInputs
     ) -join "`n"
     $buildFingerprint = Get-TextSha256 $buildFingerprintInput
 
@@ -68,7 +75,7 @@ function Get-QmtWindowsBuildCacheState {
     elseif (Test-Path -LiteralPath $buildManifestPath) {
         try {
             $buildManifest = Get-Content -LiteralPath $buildManifestPath -Raw | ConvertFrom-Json
-            if ([int]$buildManifest.schema_version -ne 1) {
+            if ([int]$buildManifest.schema_version -ne 2) {
                 $buildCacheMissReason = "manifest-version-mismatch"
             }
             elseif ([string]$buildManifest.build_fingerprint -ne $buildFingerprint) {
@@ -134,7 +141,7 @@ function Publish-QmtWindowsBuildCache {
 
     $packagedAssemblyHash = (Get-FileHash -LiteralPath $BuildCacheState.PackagedAssemblyPath -Algorithm SHA256).Hash
     $buildManifest = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         build_fingerprint = $BuildCacheState.BuildFingerprint
         dll_sha256 = $packagedAssemblyHash
         lean_commit = $BuildCacheState.LeanCommit

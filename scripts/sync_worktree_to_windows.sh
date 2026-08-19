@@ -3,7 +3,9 @@
 set -euo pipefail
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
+windows_git_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
+windows_workspace_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
+windows_workspace_manifest_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace-files'
 windows_action='sync'
 parent_task_path="${QMT_TASK_PATH:-}"
 test_task_path="${parent_task_path:-${QMT_ROOT_TASK:-test}}"
@@ -33,30 +35,53 @@ else
 fi
 echo "[qmt-task] $current_task_path"
 
-if [[ -n "$(git -C "$repository_directory" status --porcelain)" ]]; then
-    echo "Git synchronization requires a clean worktree. Commit the following changes first:" >&2
-    git -C "$repository_directory" status --short >&2
-    exit 1
-fi
-
 repository_branch="$(git -C "$repository_directory" symbolic-ref --quiet --short HEAD)"
 repository_commit="$(git -C "$repository_directory" rev-parse HEAD)"
+snapshot_file_count="$(git -C "$repository_directory" ls-files --cached --others --exclude-standard | wc -l | tr -d ' ')"
+snapshot_change_count="$(git -C "$repository_directory" status --porcelain | wc -l | tr -d ' ')"
 sync_started_at_seconds="$(date +%s)"
 
 echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch commit=$repository_commit"
 git -C "$repository_directory" push origin "HEAD:refs/heads/$repository_branch"
 echo "[qmt-test] host=mac stage=git-push status=ok branch=$repository_branch commit=$repository_commit"
 
-remote_command="\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$windows_repository_directory'; if (git status --porcelain --untracked-files=no) { throw 'The Windows QMT repository has uncommitted tracked changes.' }; git fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git switch '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; git merge --ff-only 'origin/$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; \$windowsCommit = git rev-parse HEAD; if (\$windowsCommit -ne '$repository_commit') { throw \"Expected QMT commit $repository_commit, found \$windowsCommit.\" }; if ('$windows_action' -eq 'test') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }; if ('$windows_action' -eq 'package') { & '.\\scripts\\test_windows.ps1' -RepositoryPath '$windows_repository_directory' -TaskPath '$test_task_path' -EnsurePackage; exit \$LASTEXITCODE }"
-encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+invoke_windows_powershell() {
+    local remote_command="$1"
+    local encoded_remote_command
+    encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+    zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command"
+}
+
+prepare_workspace_command="\$ErrorActionPreference = 'Stop'; git -C '$windows_git_repository_directory' fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; if (-not (Test-Path -LiteralPath '$windows_workspace_directory')) { git -C '$windows_git_repository_directory' worktree add --detach '$windows_workspace_directory' '$repository_commit'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } }; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } else { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit'"
+
+extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [Console]::In.ReadToEnd(); \$archivePath = [System.IO.Path]::GetTempFileName(); try { [System.IO.File]::WriteAllBytes(\$archivePath, [Convert]::FromBase64String(\$archiveBase64)); \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf \$archivePath -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } } finally { Remove-Item -LiteralPath \$archivePath -Force -ErrorAction SilentlyContinue }"
+
+write_snapshot_manifest_command="\$ErrorActionPreference = 'Stop'; \$manifestBase64 = [Console]::In.ReadToEnd(); [System.IO.File]::WriteAllBytes('$windows_workspace_manifest_path', [Convert]::FromBase64String(\$manifestBase64)); '[qmt-test] host=windows stage=workspace-snapshot status=ok files=$snapshot_file_count changes=$snapshot_change_count path=$windows_workspace_directory'"
+
+run_windows_command="\$ErrorActionPreference = 'Stop'; if ('$windows_action' -eq 'test') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }; if ('$windows_action' -eq 'package') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path' -EnsurePackage; exit \$LASTEXITCODE }"
 
 remote_action_started_at_seconds="$(date +%s)"
 echo "[qmt-test] host=mac stage=windows status=start action=$windows_action"
 mkdir -p "$test_log_directory"
-zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command" \
-    2>&1 \
+invoke_windows_powershell "$prepare_workspace_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$windows_test_log_path"
+git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
+    | tar -C "$repository_directory" --null -T - -czf - \
+    | base64 \
+    | invoke_windows_powershell "$extract_snapshot_command" 2>&1 \
+    | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
+    | tee -a "$windows_test_log_path"
+git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
+    | base64 \
+    | invoke_windows_powershell "$write_snapshot_manifest_command" 2>&1 \
+    | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
+    | tee -a "$windows_test_log_path"
+if [[ "$windows_action" != 'sync' ]]; then
+    invoke_windows_powershell "$run_windows_command" 2>&1 \
+        | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
+        | tee -a "$windows_test_log_path"
+fi
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"
 echo "[qmt-test] host=mac stage=windows status=ok action=$windows_action duration_seconds=$remote_action_duration_seconds"

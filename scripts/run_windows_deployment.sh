@@ -3,6 +3,7 @@
 set -euo pipefail
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
 action="${1:-}"
 task_path="${QMT_TASK_PATH:-${QMT_ROOT_TASK:-$action}}"
 skip_sync=false
@@ -31,23 +32,23 @@ fi
 
 case "$action" in
     test-readonly)
-        readonly_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_readonly.ps1'
+        readonly_test_path="$windows_repository_directory\\scripts\\test_windows_brokerage_e2e_readonly.ps1"
         readonly_e2e_task_path="$task_path > readonly-e2e"
         echo "[qmt-task] $readonly_e2e_task_path"
-        remote_command="& '$readonly_test_path' -TaskPath '$readonly_e2e_task_path'"
+        remote_command="& '$readonly_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$readonly_e2e_task_path'"
         ;;
     test-smoke)
         smoke_project_path='C:\Users\nemo\lean_project\china_smoke_test'
-        smoke_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_deployment.ps1'
+        smoke_test_path="$windows_repository_directory\\scripts\\test_windows_deployment.ps1"
         lean_live_smoke_task_path="$task_path > lean-live-smoke"
         echo "[qmt-task] $lean_live_smoke_task_path"
-        remote_command="\$ErrorActionPreference = 'Stop'; git -C '$smoke_project_path' pull --ff-only; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; & '$smoke_test_path' -TaskPath '$lean_live_smoke_task_path'"
+        remote_command="\$ErrorActionPreference = 'Stop'; git -C '$smoke_project_path' pull --ff-only; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; & '$smoke_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$lean_live_smoke_task_path'"
         ;;
     test-trading)
-        trading_test_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\scripts\test_windows_brokerage_e2e_trading.ps1'
+        trading_test_path="$windows_repository_directory\\scripts\\test_windows_brokerage_e2e_trading.ps1"
         trading_e2e_task_path="$task_path > trading-e2e"
         echo "[qmt-task] $trading_e2e_task_path"
-        remote_command="& '$trading_test_path' -TaskPath '$trading_e2e_task_path'"
+        remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path'"
         ;;
 esac
 
