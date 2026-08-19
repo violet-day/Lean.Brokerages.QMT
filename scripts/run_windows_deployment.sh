@@ -8,18 +8,18 @@ action="${1:-}"
 task_path="${QMT_TASK_PATH:-${QMT_ROOT_TASK:-$action}}"
 skip_sync=false
 
-if [[ "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
+if [[ "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" && "$action" != "test-trading-inventory" ]]; then
+    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
     exit 2
 fi
 if [[ "${2:-}" == "--skip-sync" ]]; then
     skip_sync=true
 elif [[ -n "${2:-}" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
+    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
     exit 2
 fi
 if [[ -n "${3:-}" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
+    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
     exit 2
 fi
 
@@ -49,6 +49,12 @@ case "$action" in
         trading_e2e_task_path="$task_path > trading-e2e"
         echo "[qmt-task] $trading_e2e_task_path"
         remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path'"
+        ;;
+    test-trading-inventory)
+        trading_test_path="$windows_repository_directory\\scripts\\test_windows_brokerage_e2e_trading.ps1"
+        trading_e2e_task_path="$task_path > inventory-e2e"
+        echo "[qmt-task] $trading_e2e_task_path"
+        remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path' -TestCategory 'QmtTradingInventory' -LogFileName 'test-trading-inventory.log' -RequireCompleted"
         ;;
 esac
 

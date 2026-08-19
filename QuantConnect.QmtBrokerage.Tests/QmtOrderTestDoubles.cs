@@ -128,4 +128,19 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Disconnect();
         }
     }
+
+    internal sealed class QmtOrderTestTimeProvider : ITimeProvider
+    {
+        private readonly DateTime _utcTime;
+
+        public QmtOrderTestTimeProvider(DateTime utcTime)
+        {
+            _utcTime = utcTime;
+        }
+
+        public DateTime GetUtcNow()
+        {
+            return _utcTime;
+        }
+    }
 }

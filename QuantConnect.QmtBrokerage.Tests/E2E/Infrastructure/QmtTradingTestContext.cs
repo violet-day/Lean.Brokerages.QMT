@@ -117,6 +117,13 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             return new QmtAccountProperties(true).IsOrderSubmissionAllowed(DateTime.UtcNow);
         }
 
+        public static void Skip(string reason)
+        {
+            WriteCurrentTask();
+            WriteEvidence("case", "skipped", $"reason=\"{reason}\"");
+            Assert.Ignore(reason);
+        }
+
         public void Run(Action testCase)
         {
             WriteEvidence("case", "start");
@@ -146,60 +153,17 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             return (LimitOrder)CreateOrder(OrderType.Limit, quantity, limitPrice, null);
         }
 
-        public decimal GetNonMarketableBuyPrice()
+        public decimal GetNonMarketableBuyPriceFromHistory()
         {
-            const string stage = "latest-quote";
+            const string stage = "reference-price";
             WriteEvidence(stage, "start", $"stock_code={TradingStockCode}");
-            var subscriptionConfiguration = new SubscriptionDataConfig(
-                typeof(Tick),
-                TradingSymbol,
-                Resolution.Tick,
-                TimeZones.Shanghai,
-                TimeZones.Shanghai,
-                false,
-                false,
-                false,
-                false,
-                TickType.Trade);
-            using var dataAvailable = new ManualResetEventSlim(false);
-            try
-            {
-                using var enumerator = Brokerage.Subscribe(
-                    subscriptionConfiguration,
-                    (_, _) => dataAvailable.Set());
-                Assert.That(enumerator, Is.Not.Null, "QMT did not create a quote subscription.");
-                Assert.That(
-                    dataAvailable.Wait(TimeSpan.FromSeconds(30)),
-                    Is.True,
-                    "QMT did not publish a latest quote within 30 seconds.");
-                Assert.That(enumerator!.MoveNext(), Is.True, "The QMT quote subscription returned no data.");
-                Assert.That(enumerator.Current, Is.TypeOf<Tick>());
-                var latestPrice = enumerator.Current.Value;
-                Assert.That(latestPrice, Is.GreaterThan(0m));
-                var limitPrice = RoundDownToPriceStep(latestPrice * NonMarketableBuyPriceMultiplier);
-                Assert.That(limitPrice, Is.GreaterThan(0m));
-                WriteEvidence(
-                    stage,
-                    "ok",
-                    $"latest_price={latestPrice.ToString(CultureInfo.InvariantCulture)} " +
-                    $"limit_price={limitPrice.ToString(CultureInfo.InvariantCulture)}");
-                return limitPrice;
-            }
-            finally
-            {
-                Brokerage.Unsubscribe(subscriptionConfiguration);
-            }
-        }
-
-        public decimal GetNonMarketableBuyPriceFromDailyHistory()
-        {
             var endTimeUtc = DateTime.UtcNow;
             var historyRequest = new HistoryRequest(
-                endTimeUtc.AddDays(-30),
+                endTimeUtc.AddDays(-7),
                 endTimeUtc,
                 typeof(TradeBar),
                 TradingSymbol,
-                Resolution.Daily,
+                Resolution.Minute,
                 SecurityExchangeHours.AlwaysOpen(TimeZones.Shanghai),
                 TimeZones.Shanghai,
                 null,
@@ -207,13 +171,40 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 false,
                 DataNormalizationMode.Raw,
                 TickType.Trade);
-            var latestClose = Brokerage
+            var referencePrice = Brokerage
                 .GetHistory(historyRequest)
                 .OfType<TradeBar>()
                 .OrderBy(bar => bar.EndTime)
                 .LastOrDefault()?.Close ?? 0m;
-            Assert.That(latestClose, Is.GreaterThan(0m), "QMT daily history did not provide a reference close.");
-            return RoundDownToPriceStep(latestClose * NonMarketableBuyPriceMultiplier);
+            Assert.That(referencePrice, Is.GreaterThan(0m), "QMT minute history did not provide a reference price.");
+            var limitPrice = RoundDownToPriceStep(referencePrice * NonMarketableBuyPriceMultiplier);
+            Assert.That(limitPrice, Is.GreaterThan(0m));
+            WriteEvidence(
+                stage,
+                "ok",
+                $"reference_price={referencePrice.ToString(CultureInfo.InvariantCulture)} " +
+                $"limit_price={limitPrice.ToString(CultureInfo.InvariantCulture)} source=minute-history");
+            return limitPrice;
+        }
+
+        public decimal GetTradingHoldingQuantity()
+        {
+            return Brokerage
+                .GetAccountHoldings()
+                .Where(holding => holding.Symbol == TradingSymbol)
+                .Sum(holding => holding.Quantity);
+        }
+
+        public decimal WaitForTradingHoldingQuantity(decimal expectedQuantity, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow.Add(timeout);
+            var quantity = GetTradingHoldingQuantity();
+            while (quantity != expectedQuantity && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(250);
+                quantity = GetTradingHoldingQuantity();
+            }
+            return quantity;
         }
 
         public OrderStatus WaitForStatus(
@@ -306,16 +297,22 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 return;
             }
             _disposed = true;
-            foreach (var order in _createdOrders)
+            try
             {
-                TryCancelRemainingTestOrder(order);
+                foreach (var order in _createdOrders)
+                {
+                    CancelRemainingTestOrder(order);
+                }
             }
-            Brokerage.OrderIdChanged -= HandleOrderIdChanged;
-            Brokerage.OrdersStatusChanged -= HandleOrderStatusChanged;
-            Brokerage.Dispose();
-            foreach (var statusSignal in _statusSignalsByOrderId.Values)
+            finally
             {
-                statusSignal.Dispose();
+                Brokerage.OrderIdChanged -= HandleOrderIdChanged;
+                Brokerage.OrdersStatusChanged -= HandleOrderStatusChanged;
+                Brokerage.Dispose();
+                foreach (var statusSignal in _statusSignalsByOrderId.Values)
+                {
+                    statusSignal.Dispose();
+                }
             }
         }
 
@@ -370,40 +367,49 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             }
         }
 
-        private void TryCancelRemainingTestOrder(Order order)
+        private void CancelRemainingTestOrder(Order order)
         {
-            try
+            var orderSnapshot = FindOrderSnapshot(order);
+            if (orderSnapshot == null)
             {
-                var orderSnapshot = FindOrderSnapshot(order);
-                if (orderSnapshot == null)
-                {
-                    WriteEvidence("cleanup", "ok", $"lean_order_id={order.Id} action=none order_found=false");
-                    return;
-                }
-                var orderStatus = QmtOrderStatusMapper.GetLeanOrderStatus(orderSnapshot.Status);
-                if (!orderStatus.IsOpen())
-                {
-                    WriteEvidence(
-                        "cleanup",
-                        "ok",
-                        $"native_order_id={orderSnapshot.OrderId} action=none status={orderStatus}");
-                    return;
-                }
-                GatewayClient
-                    .SendRequestAsync(
-                        QmtProtocol.Operations.CancelOrder,
-                        new QmtCancelOrderRequest { OrderId = orderSnapshot.OrderId })
-                    .GetAwaiter()
-                    .GetResult();
+                WriteEvidence("cleanup", "ok", $"lean_order_id={order.Id} action=none order_found=false");
+                return;
+            }
+            var orderStatus = QmtOrderStatusMapper.GetLeanOrderStatus(orderSnapshot.Status);
+            if (!orderStatus.IsOpen())
+            {
                 WriteEvidence(
                     "cleanup",
                     "ok",
-                    $"native_order_id={orderSnapshot.OrderId} action=cancel-submitted previous_status={orderStatus}");
+                    $"native_order_id={orderSnapshot.OrderId} action=none status={orderStatus}");
+                return;
             }
-            catch (Exception exception)
+
+            if (!order.BrokerId.Contains(orderSnapshot.OrderId))
             {
-                WriteFailure("cleanup", exception);
+                order.BrokerId.Clear();
+                order.BrokerId.Add(orderSnapshot.OrderId);
             }
+            Assert.That(
+                Brokerage.CancelOrder(order),
+                Is.True,
+                $"Cleanup cancellation was rejected for QMT order {orderSnapshot.OrderId}.");
+            var canceledOrderSnapshot = WaitForOrderSnapshot(
+                order,
+                TimeSpan.FromSeconds(15),
+                snapshot => QmtOrderStatusMapper.GetLeanOrderStatus(snapshot.Status) == OrderStatus.Canceled);
+            Assert.That(
+                canceledOrderSnapshot,
+                Is.Not.Null,
+                $"Cleanup did not confirm Canceled for QMT order {orderSnapshot.OrderId}.");
+            Assert.That(
+                Brokerage.GetOpenOrders().Any(openOrder => openOrder.BrokerId.Contains(orderSnapshot.OrderId)),
+                Is.False,
+                $"Cleanup left QMT order {orderSnapshot.OrderId} open.");
+            WriteEvidence(
+                "cleanup",
+                "ok",
+                $"native_order_id={orderSnapshot.OrderId} action=cancel-confirmed status=Canceled open_order=false");
         }
 
         private static decimal RoundDownToPriceStep(decimal price)

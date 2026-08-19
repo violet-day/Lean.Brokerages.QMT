@@ -6,7 +6,7 @@ export QMT_ROOT_TASK
 
 task_path = $(if $(filter $(1),$(QMT_ROOT_TASK)),$(QMT_ROOT_TASK),$(QMT_ROOT_TASK) > $(1))
 
-.PHONY: sync-windows package-windows test test-readonly test-smoke test-trading
+.PHONY: sync-windows package-windows test test-readonly test-smoke test-trading test-trading-inventory
 
 test:
 	@echo '[qmt-task] $(call task_path,test)'
@@ -29,3 +29,6 @@ test-smoke: package-windows
 
 test-trading: package-windows
 	@QMT_TASK_PATH='$(call task_path,test-trading)' ./scripts/run_windows_deployment.sh test-trading --skip-sync
+
+test-trading-inventory: package-windows
+	@QMT_TASK_PATH='$(call task_path,test-trading-inventory)' ./scripts/run_windows_deployment.sh test-trading-inventory --skip-sync

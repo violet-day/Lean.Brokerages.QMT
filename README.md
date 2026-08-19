@@ -146,7 +146,7 @@ fast-forward the same branch on Windows without testing:
 make sync-windows
 ```
 
-The repository exposes six Make targets. Use `test` after Brokerage changes,
+The repository exposes focused Make targets. Use `test` after Brokerage changes,
 `package-windows` to sync and ensure the matching verified DLL is published,
 `test-readonly` for the real-QMT Brokerage E2E, and `test-smoke` for the complete
 LEAN live path:
@@ -158,6 +158,7 @@ make test
 make test-readonly
 make test-smoke
 make test-trading
+make test-trading-inventory
 ```
 
 `make test-readonly` runs the real Brokerage NUnit test, which checks the
@@ -269,13 +270,23 @@ The repeatable category is fixed to `600000.SH` and `100` shares. It requires
 the Gateway handshake account to match `lean-qmt.json`, and selects cases for
 the QMT simulation session (`10:00-17:00` Asia/Shanghai). During the session it
 places a non-marketable limit order, validates `Submitted`, cancellation and
-the final `query_orders` state. Outside the session it requires the same safe
-limit order and a `latest-price` market order to be rejected. Local
-invalid-order cases do not reach QMT. The separate `QmtTradingInventory`
-category contains the session-only market-buy fill case because each run adds
-100 T+0 shares. Every case queries by its unique client ID and attempts to
-cancel a remaining open order. Its concise Windows log is:
+the final `query_orders` state. Outside the session it requires an explicit
+`latest-price` market order to raise `MarketClosed`. Local invalid-order cases
+run with the normal unit/contract suite instead of connecting to QMT. Cleanup
+does not pass until a remaining order reaches `Canceled` and disappears from
+the open-order query.
+
+The stateful market-buy case has a separate, explicit command:
+
+```bash
+make test-trading-inventory
+```
+
+It runs only during the simulation session, buys 100 shares, and verifies the
+fill plus the exact 100-share holding increase. Each invocation intentionally
+adds 100 T+0 shares. Concise Windows logs are:
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log
+http://192.168.50.135:8000/e2e/test-trading-inventory.log
 ```

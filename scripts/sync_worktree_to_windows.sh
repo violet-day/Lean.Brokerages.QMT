@@ -26,6 +26,15 @@ if [[ "$windows_action" == 'package' ]]; then
 fi
 windows_test_log_path="$test_log_directory/$windows_test_log_name"
 
+list_snapshot_files() {
+    git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
+        | while IFS= read -r -d '' relative_path; do
+            if [[ -e "$repository_directory/$relative_path" || -L "$repository_directory/$relative_path" ]]; then
+                printf '%s\0' "$relative_path"
+            fi
+        done
+}
+
 if [[ -z "$parent_task_path" ]]; then
     current_task_path="${QMT_ROOT_TASK:-sync-windows}"
 elif [[ "$parent_task_path" == "sync-windows" || "$parent_task_path" == *" > sync-windows" ]]; then
@@ -37,7 +46,7 @@ echo "[qmt-task] $current_task_path"
 
 repository_branch="$(git -C "$repository_directory" symbolic-ref --quiet --short HEAD)"
 repository_commit="$(git -C "$repository_directory" rev-parse HEAD)"
-snapshot_file_count="$(git -C "$repository_directory" ls-files --cached --others --exclude-standard | wc -l | tr -d ' ')"
+snapshot_file_count="$(list_snapshot_files | tr -cd '\0' | wc -c | tr -d ' ')"
 snapshot_change_count="$(git -C "$repository_directory" status --porcelain | wc -l | tr -d ' ')"
 sync_started_at_seconds="$(date +%s)"
 
@@ -66,13 +75,13 @@ mkdir -p "$test_log_directory"
 invoke_windows_powershell "$prepare_workspace_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$windows_test_log_path"
-git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
+list_snapshot_files \
     | tar -C "$repository_directory" --null -T - -czf - \
     | base64 \
     | invoke_windows_powershell "$extract_snapshot_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee -a "$windows_test_log_path"
-git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
+list_snapshot_files \
     | base64 \
     | invoke_windows_powershell "$write_snapshot_manifest_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \

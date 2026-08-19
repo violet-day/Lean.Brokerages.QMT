@@ -6,6 +6,9 @@ param(
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
     [int]$GatewayPort = 17890,
     [string]$TaskPath = "test-trading > trading-e2e",
+    [string]$TestCategory = "QmtTradingRepeatable",
+    [string]$LogFileName = "test-trading.log",
+    [switch]$RequireCompleted,
     [string]$LeanVersion = "",
     [string]$TargetFramework = ""
 )
@@ -18,9 +21,10 @@ $OutputEncoding = $utf8Encoding
 . (Join-Path $PSScriptRoot "windows_build_cache.ps1")
 
 $privateLogDirectory = Join-Path $RepositoryPath ".test-logs"
-$privateLogPath = Join-Path $privateLogDirectory "windows-brokerage-e2e-trading-full.log"
+$privateLogName = "windows-brokerage-e2e-$([System.IO.Path]::GetFileNameWithoutExtension($LogFileName))-full.log"
+$privateLogPath = Join-Path $privateLogDirectory $privateLogName
 $userLogDirectory = Join-Path $LogRootPath "e2e"
-$userLogPath = Join-Path $userLogDirectory "test-trading.log"
+$userLogPath = Join-Path $userLogDirectory $LogFileName
 New-Item -ItemType Directory -Path $privateLogDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $userLogDirectory -Force | Out-Null
 [System.IO.File]::WriteAllText($privateLogPath, "", $utf8Encoding)
@@ -75,7 +79,7 @@ function Invoke-StreamingTestCommand {
 }
 
 $currentStage = "preflight"
-Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start account_source=gateway_hello stock_code=600000.SH quantity=100 order_types=limit,market"
+Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start category=$TestCategory account_source=gateway_hello stock_code=600000.SH quantity=100"
 try {
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
@@ -160,19 +164,28 @@ try {
         "--no-build",
         "--no-restore",
         "--nologo",
-        "--filter", "TestCategory=QmtTradingRepeatable",
+        "--filter", "TestCategory=$TestCategory",
         "--logger", "console;verbosity=normal"
     )
     if ($testResult.ExitCode -ne 0) {
         throw "The real QMT trading E2E test failed."
     }
+    $discoveryMatch = [regex]::Match($testResult.Output, "NUnit3TestExecutor discovered (?<count>\d+) of")
+    if (-not $discoveryMatch.Success -or [int]$discoveryMatch.Groups["count"].Value -lt 1) {
+        throw "No QMT trading E2E cases were discovered for category $TestCategory."
+    }
+    $discoveredTestCases = [int]$discoveryMatch.Groups["count"].Value
     $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
     $completedTestCases = [regex]::Matches($evidenceText, "stage=case-complete status=ok").Count
-    if ($completedTestCases -lt 1) {
-        throw "The QMT trading E2E case completion evidence is missing."
+    $skippedTestCases = [regex]::Matches($evidenceText, "stage=case status=skipped").Count
+    if ($completedTestCases + $skippedTestCases -ne $discoveredTestCases) {
+        throw "Expected evidence for $discoveredTestCases QMT trading E2E cases, found $completedTestCases completed and $skippedTestCases skipped."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok tests=$completedTestCases"
-    Write-TradingEvidence "[qmt-trading-e2e] stage=run status=ok log=http://192.168.50.135:8000/e2e/test-trading.log"
+    if ($RequireCompleted -and $completedTestCases -ne $discoveredTestCases) {
+        throw "Category $TestCategory requires all $discoveredTestCases cases to run; $skippedTestCases were skipped."
+    }
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok tests=$discoveredTestCases passed=$completedTestCases skipped=$skippedTestCases"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=run status=ok log=http://192.168.50.135:8000/e2e/$LogFileName"
 }
 catch {
     $reason = $_.Exception.Message.Replace('"', "'").Replace("`r", " ").Replace("`n", " ")

@@ -164,13 +164,18 @@ try {
         }
         throw "The real QMT read-only Brokerage E2E test failed."
     }
+    $discoveryMatch = [regex]::Match($testResult.Output, "NUnit3TestExecutor discovered (?<count>\d+) of")
+    if (-not $discoveryMatch.Success -or [int]$discoveryMatch.Groups["count"].Value -lt 1) {
+        throw "No QMT read-only E2E cases were discovered."
+    }
+    $discoveredTestCases = [int]$discoveryMatch.Groups["count"].Value
     $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
     $completedTestCases = [regex]::Matches($evidenceText, "stage=case-complete status=ok").Count
     $skippedTestCases = [regex]::Matches($evidenceText, "stage=case status=skipped").Count
-    if ($completedTestCases + $skippedTestCases -ne 6) {
-        throw "Expected 6 QMT read-only E2E cases, found $completedTestCases completed and $skippedTestCases skipped."
+    if ($completedTestCases + $skippedTestCases -ne $discoveredTestCases) {
+        throw "Expected evidence for $discoveredTestCases QMT read-only E2E cases, found $completedTestCases completed and $skippedTestCases skipped."
     }
-    Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=6 passed=$completedTestCases skipped=$skippedTestCases"
+    Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=$discoveredTestCases passed=$completedTestCases skipped=$skippedTestCases"
 
     $currentStage = "log-server-local"
     Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"

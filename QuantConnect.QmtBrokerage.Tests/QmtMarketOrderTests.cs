@@ -16,7 +16,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             using var brokerage = new QmtBrokerage(
                 gatewayClient,
                 new QmtOrderTestProvider(),
-                timeProvider: new TestTimeProvider(
+                timeProvider: new QmtOrderTestTimeProvider(
                     new DateTime(2026, 8, 19, 4, 0, 0, DateTimeKind.Utc)));
             var order = CreateMarketOrder(
                 "600000.SH",
@@ -111,7 +111,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             using var brokerage = new QmtBrokerage(
                 gatewayClient,
                 new QmtOrderTestProvider(),
-                timeProvider: new TestTimeProvider(
+                timeProvider: new QmtOrderTestTimeProvider(
                     new DateTime(2026, 8, 19, 9, 0, 0, DateTimeKind.Utc)));
             var order = CreateMarketOrder("600000.SH", QmtMarketOrderStyle.LatestPrice);
 
@@ -214,19 +214,5 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 QmtSymbolMapper.MarketName);
         }
 
-        private sealed class TestTimeProvider : ITimeProvider
-        {
-            private readonly DateTime _utcTime;
-
-            public TestTimeProvider(DateTime utcTime)
-            {
-                _utcTime = utcTime;
-            }
-
-            public DateTime GetUtcNow()
-            {
-                return _utcTime;
-            }
-        }
     }
 }

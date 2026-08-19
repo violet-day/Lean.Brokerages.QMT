@@ -125,18 +125,22 @@ make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-readonly   # 只跑真实 Brokerage 非交易 E2E
 make test-smoke      # 只跑完整 LEAN live smoke
 make test-trading
+make test-trading-inventory # 成交并增加 100 股 T+0 持仓
 ```
 
 `make test-trading` 要求 Gateway `hello` 返回的账号与 `lean-qmt.json` 完全一致。
 测试固定使用 `600000.SH`、数量 `100`。模拟交易时段内验证非成交限价单的提交、
-`Submitted` 回调、撤单、`Canceled` 回调及最终订单查询；时段外验证 QMT 明确拒单。
-时段外同时验证 `latest-price` MarketOrder 被拒绝。本地非法订单 case 不会发送到
-QMT。`QmtTradingInventory` 类别中的 MarketOrder 成交 case 不属于默认
-`test-trading`，因为每次执行会增加 100 股 T+0 持仓。每个 case 失败时均按唯一
-client ID 查询并尝试撤销遗留委托。日志为：
+`Submitted` 回调、撤单、`Canceled` 回调及最终订单查询；时段外验证显式 style 的
+MarketOrder 抛出 `MarketClosed`。本地非法订单 case 属于 unit/contract，不连接
+QMT。清理只有在遗留订单确认 `Canceled` 且不再出现在 open orders 后才算成功。
+
+`make test-trading-inventory` 是独立的状态型 E2E：每次买入 100 股并验证成交量、
+成交价、`query_orders` 以及持仓准确增加 100 股。每次执行都会增加 100 股 T+0
+持仓。日志为：
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log
+http://192.168.50.135:8000/e2e/test-trading-inventory.log
 ```
 
 日志保存在：

@@ -7,20 +7,21 @@ using QuantConnect.Orders;
 namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
 {
     [TestFixture]
-    [Explicit("Places and cancels real orders through the current QMT simulation account.")]
+    [Explicit("Places and cancels real limit orders through the QMT simulation account.")]
     [Category(QmtE2ETestCategories.TradingRepeatable)]
     [NonParallelizable]
-    public class QmtTradingOrderLifecycleE2ETests
+    public class QmtLimitOrderLifecycleE2ETests
     {
         private QmtTradingTestContext _context = null!;
 
         [SetUp]
         public void Connect()
         {
-            Assume.That(
-                QmtTradingTestContext.IsSimulationSessionOpen(),
-                Is.True,
-                "Requires the QMT simulation session between 10:00 and 17:00 Asia/Shanghai.");
+            if (!QmtTradingTestContext.IsSimulationSessionOpen())
+            {
+                QmtTradingTestContext.Skip(
+                    "Requires the QMT simulation session between 10:00 and 17:00 Asia/Shanghai.");
+            }
             _context = QmtTradingTestContext.Connect();
         }
 
@@ -63,7 +64,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
 
         private Order PlaceAndCancelNonMarketableLimitBuy()
         {
-            var limitPrice = _context.GetNonMarketableBuyPrice();
+            var limitPrice = _context.GetNonMarketableBuyPriceFromHistory();
             var order = _context.CreateLimitOrder(QmtTradingTestContext.TradingQuantity, limitPrice);
 
             _context.WriteStage(
