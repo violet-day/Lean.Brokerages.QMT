@@ -29,7 +29,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
         public void Connect()
         {
             const string stage = "connect";
-            WriteEvidence(stage, "", "start");
+            WriteCurrentTask();
+            WriteEvidence(stage, "start");
             try
             {
                 var accountId = Environment.GetEnvironmentVariable("QMT_E2E_ACCOUNT_ID");
@@ -66,7 +67,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
                     _brokerage.AccountProperties.IsSimulation,
                     Is.True,
                     "The connected QMT runtime is not identified as the simulation account.");
-                WriteEvidence(stage, "account_match=true is_simulation=true");
+                WriteEvidence(stage, "ok", "account_match=true is_simulation=true");
             }
             catch (Exception exception)
             {
@@ -82,26 +83,26 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
         }
 
         [Test]
-        [Timeout(180000)]
-        public async Task RunsReadOnlyBrokerageEndToEnd()
+        public void ReturnsCashHoldingsAndOpenOrders()
         {
-            var currentStage = "account";
-            WriteEvidence("run", "operations=readonly", "start");
-            try
+            RunCase("account", () =>
             {
-                WriteEvidence(currentStage, "", "start");
                 var cashBalances = _brokerage.GetCashBalance();
                 var holdings = _brokerage.GetAccountHoldings();
                 var openOrders = _brokerage.GetOpenOrders();
                 Assert.That(cashBalances.Count(cash => cash.Currency == "CNY"), Is.EqualTo(1));
                 Assert.That(holdings, Is.Not.Null);
                 Assert.That(openOrders, Is.Not.Null);
-                WriteEvidence(
-                    currentStage,
+                WriteEvidence("account", "ok",
                     $"cash_accounts={cashBalances.Count} holdings={holdings.Count} open_orders={openOrders.Count}");
+            });
+        }
 
-                currentStage = "concurrent-queries";
-                WriteEvidence(currentStage, "", "start");
+        [Test]
+        public Task SupportsConcurrentAccountPositionAndOrderQueries()
+        {
+            return RunCaseAsync("concurrent-queries", async () =>
+            {
                 var accountRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryAccount);
                 var positionsRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryPositions);
                 var ordersRequestTask = _gatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryOrders);
@@ -109,10 +110,15 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
                 Assert.That(accountRequestTask.Result.ToPayload<QmtQueryAccountPayload>().Accounts, Is.Not.Empty);
                 Assert.That(positionsRequestTask.Result.ToPayload<QmtQueryPositionsPayload>().Positions, Is.Not.Null);
                 Assert.That(ordersRequestTask.Result.ToPayload<QmtQueryOrdersPayload>().Orders, Is.Not.Null);
-                WriteEvidence(currentStage, "account=ok positions=ok orders=ok");
+                WriteEvidence("concurrent-queries", "ok", "account=ok positions=ok orders=ok");
+            });
+        }
 
-                currentStage = "history";
-                WriteEvidence(currentStage, "", "start");
+        [Test]
+        public void ReturnsOrderedDailyAndMinuteHistory()
+        {
+            RunCase("history", () =>
+            {
                 var symbol = _symbolMapper.GetLeanSymbol(
                     StockCode,
                     SecurityType.Equity,
@@ -124,67 +130,94 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
                 Assert.That(dailyHistory.Select(bar => bar.EndTime), Is.Ordered);
                 Assert.That(minuteHistory.Select(bar => bar.EndTime), Is.Ordered);
                 WriteEvidence(
-                    currentStage,
+                    "history",
+                    "ok",
                     $"daily_bars={dailyHistory.Count} minute_bars={minuteHistory.Count} ordered=true");
+            });
+        }
 
-                var subscriptionConfiguration = new SubscriptionDataConfig(
-                    typeof(Tick),
-                    symbol,
-                    Resolution.Tick,
-                    TimeZones.Shanghai,
-                    TimeZones.Shanghai,
-                    false,
-                    false,
-                    false,
-                    false,
-                    TickType.Trade);
+        [Test]
+        public void SubscribesAndUnsubscribesTradeTicks()
+        {
+            RunCase("subscription", () =>
+            {
+                var subscriptionConfiguration = CreateTradeSubscriptionConfiguration();
+                using var enumerator = _brokerage.Subscribe(
+                    subscriptionConfiguration,
+                    (_, _) => { });
+                Assert.That(enumerator, Is.Not.Null);
+                _brokerage.Unsubscribe(subscriptionConfiguration);
+                WriteEvidence("subscription", "ok", "subscribed=true unsubscribed=true");
+            });
+        }
+
+        [Test]
+        [Timeout(120000)]
+        public void StreamsTradeTicksDuringMarketHours()
+        {
+            var chinaTime = DateTime.UtcNow.ConvertFromUtc(TimeZones.Shanghai);
+            if (!IsChinaMarketOpen(chinaTime))
+            {
+                WriteEvidence("case", "skipped", "operation=live-data reason=market_closed");
+                Assert.Ignore("Requires an open China A-share market session.");
+            }
+
+            RunCase("live-data", () =>
+            {
+                var subscriptionConfiguration = CreateTradeSubscriptionConfiguration();
                 using var dataAvailable = new ManualResetEventSlim(false);
-                currentStage = "subscribe";
-                WriteEvidence(currentStage, "", "start");
                 using var enumerator = _brokerage.Subscribe(
                     subscriptionConfiguration,
                     (_, _) => dataAvailable.Set());
-                Assert.That(enumerator, Is.Not.Null);
-                WriteEvidence(currentStage, "subscribed=true");
-
-                currentStage = "live-data";
-                WriteEvidence(currentStage, "", "start");
-                var chinaTime = DateTime.UtcNow.ConvertFromUtc(TimeZones.Shanghai);
-                if (IsChinaMarketOpen(chinaTime))
+                try
                 {
+                    Assert.That(enumerator, Is.Not.Null);
                     Assert.That(
                         dataAvailable.Wait(TimeSpan.FromSeconds(90)),
                         Is.True,
                         "QMT did not publish a trade tick within 90 seconds.");
                     Assert.That(enumerator!.MoveNext(), Is.True);
                     Assert.That(enumerator.Current, Is.TypeOf<Tick>());
-                    WriteEvidence("live-data", "tick_received=true");
+                    WriteEvidence("live-data", "ok", "tick_received=true");
                 }
-                else
+                finally
                 {
-                    WriteEvidence("live-data", "reason=market_closed", "skipped");
+                    _brokerage.Unsubscribe(subscriptionConfiguration);
                 }
+            });
+        }
 
-                currentStage = "unsubscribe";
-                WriteEvidence(currentStage, "", "start");
-                _brokerage.Unsubscribe(subscriptionConfiguration);
-                WriteEvidence(currentStage, "unsubscribed=true");
-
-                currentStage = "connection-reopen";
-                WriteEvidence(currentStage, "", "start");
+        [Test]
+        public void ReconnectsAndQueriesAccount()
+        {
+            RunCase("connection-reopen", () =>
+            {
                 _brokerage.Disconnect();
                 Assert.That(_brokerage.IsConnected, Is.False);
                 _brokerage.Connect();
                 Assert.That(_brokerage.IsConnected, Is.True);
                 Assert.That(_brokerage.GetCashBalance(), Is.Not.Empty);
-                WriteEvidence(currentStage, "account_query=ok");
-                WriteEvidence("complete", "operations=readonly");
-            }
-            catch (Exception exception)
-            {
-                WriteFailure(currentStage, exception);
-                throw;
-            }
+                WriteEvidence("connection-reopen", "ok", "account_query=ok");
+            });
+        }
+
+        private SubscriptionDataConfig CreateTradeSubscriptionConfiguration()
+        {
+            var symbol = _symbolMapper.GetLeanSymbol(
+                StockCode,
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            return new SubscriptionDataConfig(
+                typeof(Tick),
+                symbol,
+                Resolution.Tick,
+                TimeZones.Shanghai,
+                TimeZones.Shanghai,
+                false,
+                false,
+                false,
+                false,
+                TickType.Trade);
         }
 
         private System.Collections.Generic.List<BaseData> GetHistory(
@@ -224,14 +257,59 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
 
         private static void WriteEvidence(
             string stage,
-            string details,
-            string status = "ok")
+            string status,
+            string details = "")
         {
-            var message = $"[qmt-e2e] stage={stage} status={status}";
+            var testName = TestContext.CurrentContext.Test.MethodName ?? TestContext.CurrentContext.Test.Name;
+            var message = $"[qmt-e2e] stage={stage} status={status} test={testName}";
             if (!string.IsNullOrWhiteSpace(details))
             {
                 message += " " + details;
             }
+            WriteLog(message);
+        }
+
+        private static void WriteCurrentTask()
+        {
+            var taskPath = Environment.GetEnvironmentVariable("QMT_E2E_TASK_PATH") ??
+                "test-readonly > readonly-e2e";
+            var className = TestContext.CurrentContext.Test.ClassName?.Split('.').Last() ?? "unknown-class";
+            var testName = TestContext.CurrentContext.Test.MethodName ?? TestContext.CurrentContext.Test.Name;
+            WriteLog($"[qmt-task] {taskPath} > {className} > {testName}");
+        }
+
+        private static void RunCase(string operation, Action testCase)
+        {
+            WriteEvidence("case", "start", $"operation={operation}");
+            try
+            {
+                testCase();
+                WriteEvidence("case-complete", "ok", $"operation={operation}");
+            }
+            catch (Exception exception)
+            {
+                WriteFailure("case", exception);
+                throw;
+            }
+        }
+
+        private static async Task RunCaseAsync(string operation, Func<Task> testCase)
+        {
+            WriteEvidence("case", "start", $"operation={operation}");
+            try
+            {
+                await testCase();
+                WriteEvidence("case-complete", "ok", $"operation={operation}");
+            }
+            catch (Exception exception)
+            {
+                WriteFailure("case", exception);
+                throw;
+            }
+        }
+
+        private static void WriteLog(string message)
+        {
             var line = $"{DateTimeOffset.Now:O} {message}";
             var evidenceLogPath = Environment.GetEnvironmentVariable("QMT_E2E_LOG_PATH");
             if (!string.IsNullOrWhiteSpace(evidenceLogPath))
@@ -247,7 +325,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
         private static void WriteFailure(string stage, Exception exception)
         {
             var reason = exception.Message.Replace("\"", "'").Replace("\r", " ").Replace("\n", " ");
-            WriteEvidence(stage, $"error_type={exception.GetType().Name} reason=\"{reason}\"", "failed");
+            WriteEvidence(stage, "failed", $"error_type={exception.GetType().Name} reason=\"{reason}\"");
         }
     }
 }

@@ -141,6 +141,7 @@ try {
     $env:QMT_E2E_GATEWAY_PORT = [string]$GatewayPort
     $env:QMT_E2E_DATA_FOLDER = "C:\Users\nemo\lean\Lean\Data"
     $env:QMT_E2E_LOG_PATH = $userLogPath
+    $env:QMT_E2E_TASK_PATH = $TaskPath
     $env:DOTNET_CLI_UI_LANGUAGE = "en-US"
     $testResult = Invoke-CapturedCommand $dotnetExecutable @(
         "test",
@@ -162,10 +163,13 @@ try {
         }
         throw "The real QMT read-only Brokerage E2E test failed."
     }
-    if (-not $testResult.Output.Contains("stage=complete status=ok operations=readonly")) {
-        throw "The QMT E2E completion evidence is missing."
+    $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
+    $completedTestCases = [regex]::Matches($evidenceText, "stage=case-complete status=ok").Count
+    $skippedTestCases = [regex]::Matches($evidenceText, "stage=case status=skipped").Count
+    if ($completedTestCases + $skippedTestCases -ne 6) {
+        throw "Expected 6 QMT read-only E2E cases, found $completedTestCases completed and $skippedTestCases skipped."
     }
-    Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=1"
+    Write-E2EEvidence "[qmt-e2e] stage=brokerage-test status=ok tests=6 passed=$completedTestCases skipped=$skippedTestCases"
 
     $currentStage = "log-server-local"
     Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
@@ -191,5 +195,6 @@ finally {
     Remove-Item Env:QMT_E2E_GATEWAY_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_E2E_DATA_FOLDER -ErrorAction SilentlyContinue
     Remove-Item Env:QMT_E2E_LOG_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:QMT_E2E_TASK_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:DOTNET_CLI_UI_LANGUAGE -ErrorAction SilentlyContinue
 }
