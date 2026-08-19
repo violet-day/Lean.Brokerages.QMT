@@ -47,6 +47,10 @@ function Invoke-StreamingTestCommand {
     )
 
     $outputLines = New-Object System.Collections.Generic.List[string]
+    $userFacingTestLinePattern = "\[qmt-task\]|\[qmt-trading-e2e\]|" +
+        "^\s*(Passed|Failed|Skipped)\s|^Total tests:|" +
+        "^\s+(Passed|Failed|Skipped):|^\s*Total time:|" +
+        "^Test Run (Passed|Failed)\.|NUnit3TestExecutor discovered"
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
@@ -54,7 +58,7 @@ function Invoke-StreamingTestCommand {
             $line = [string]$_
             [void]$outputLines.Add($line)
             [System.IO.File]::AppendAllText($privateLogPath, $line + "`r`n", $utf8Encoding)
-            if ($line -match "\[qmt-task\]|\[qmt-trading-e2e\]") {
+            if ($line -match $userFacingTestLinePattern) {
                 [Console]::Error.WriteLine($line)
             }
         }
