@@ -40,35 +40,26 @@ function Write-CurrentTask {
     Write-TradingEvidence "[qmt-task] $TaskPath > $CurrentTask"
 }
 
-function Invoke-CapturedCommand {
+function Invoke-StreamingTestCommand {
     param(
         [string]$Executable,
         [string[]]$Arguments
     )
 
-    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processStartInfo.FileName = $Executable
-    $processStartInfo.Arguments = $Arguments -join " "
-    $processStartInfo.WorkingDirectory = $RepositoryPath
-    $processStartInfo.UseShellExecute = $false
-    $processStartInfo.CreateNoWindow = $true
-    $processStartInfo.RedirectStandardOutput = $true
-    $processStartInfo.RedirectStandardError = $true
-
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $processStartInfo
-    [void]$process.Start()
-    $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
-    $standardErrorTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $standardOutput = $standardOutputTask.Result
-    $standardError = $standardErrorTask.Result
-    $exitCode = $process.ExitCode
-    $process.Dispose()
+    $outputLines = New-Object System.Collections.Generic.List[string]
+    & $Executable @Arguments 2>&1 | ForEach-Object {
+        $line = [string]$_
+        [void]$outputLines.Add($line)
+        [System.IO.File]::AppendAllText($privateLogPath, $line + "`r`n", $utf8Encoding)
+        if ($line -match "\[qmt-task\]|\[qmt-trading-e2e\]") {
+            [Console]::Error.WriteLine($line)
+        }
+    }
+    $exitCode = $LASTEXITCODE
 
     return [PSCustomObject]@{
         ExitCode = $exitCode
-        Output = $standardOutput + $standardError
+        Output = $outputLines -join "`r`n"
     }
 }
 
@@ -151,7 +142,7 @@ try {
     $env:QMT_TRADING_E2E_ACCOUNT_ID = $accountId
     $env:QMT_TRADING_E2E_TASK_PATH = $TaskPath
     $env:DOTNET_CLI_UI_LANGUAGE = "en-US"
-    $testResult = Invoke-CapturedCommand $dotnetExecutable @(
+    $testResult = Invoke-StreamingTestCommand $dotnetExecutable @(
         "test",
         $testProjectPath,
         "--configuration", "Release",
@@ -161,7 +152,6 @@ try {
         "--filter", "TestCategory=QmtTradingRepeatable",
         "--logger", "console;verbosity=normal"
     )
-    [System.IO.File]::AppendAllText($privateLogPath, $testResult.Output, $utf8Encoding)
     if ($testResult.ExitCode -ne 0) {
         throw "The real QMT trading E2E test failed."
     }
