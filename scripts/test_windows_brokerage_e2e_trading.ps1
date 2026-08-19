@@ -84,25 +84,11 @@ try {
     if (-not $accountId) {
         throw "qmt-account-id is missing from $LeanConfigurationPath"
     }
-    $marketOrderStyle = [string]$configuration."qmt-market-order-style"
-    if (-not $marketOrderStyle) {
-        $marketOrderStyle = "latest-price"
-    }
-    if ($marketOrderStyle -ne "latest-price") {
-        throw "test-trading requires qmt-market-order-style=latest-price for the QMT simulation account."
-    }
-    $tradingEnvironment = [string]$configuration."qmt-trading-environment"
-    if (-not $tradingEnvironment) {
-        $tradingEnvironment = "simulation"
-    }
-    if ($tradingEnvironment -ne "simulation") {
-        throw "test-trading requires qmt-trading-environment=simulation."
-    }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
-    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort market_order_style=$marketOrderStyle trading_environment=$tradingEnvironment"
+    Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok gateway_port=$GatewayPort account_properties=gateway_hello"
 
     $currentStage = "build-cache"
     Write-CurrentTask "csharp-build"

@@ -26,8 +26,7 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
-        private readonly QmtMarketOrderStyle _marketOrderStyle;
-        private readonly QmtTradingEnvironment _tradingEnvironment;
+        private QmtAccountProperties? _accountProperties;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
@@ -48,19 +47,23 @@ namespace QuantConnect.Brokerages.Qmt
 
         public override bool IsConnected => _gatewayClient.IsConnected;
 
+        public QmtAccountProperties AccountProperties => _accountProperties ??
+            throw new QmtGatewayException("QMT account properties are unavailable before the Gateway handshake.");
+
         public QmtBrokerage(
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
-            QmtSymbolMapper? symbolMapper = null,
-            QmtMarketOrderStyle marketOrderStyle = QmtMarketOrderStyle.LatestPrice,
-            QmtTradingEnvironment tradingEnvironment = QmtTradingEnvironment.Live)
+            QmtSymbolMapper? symbolMapper = null)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
-            _marketOrderStyle = marketOrderStyle;
-            _tradingEnvironment = tradingEnvironment;
+            if (_gatewayClient.ServerInformation != null)
+            {
+                _accountProperties = new QmtAccountProperties(
+                    _gatewayClient.ServerInformation.IsSimulation);
+            }
             AccountBaseCurrency = "CNY";
             _gatewayClient.EventReceived += HandleGatewayEvent;
             _gatewayClient.Disconnected += HandleGatewayDisconnected;
@@ -73,9 +76,11 @@ namespace QuantConnect.Brokerages.Qmt
             _gatewayClient.Connect();
             var serverInformation = _gatewayClient.ServerInformation ??
                 throw new QmtGatewayProtocolException("QMT Gateway connected without hello server information.");
+            _accountProperties = new QmtAccountProperties(serverInformation.IsSimulation);
             Log.Trace(
                 $"QmtBrokerage.Connect(): stage=connect status=ok account_id={serverInformation.AccountId} " +
-                $"server={serverInformation.ServerName}");
+                $"server={serverInformation.ServerName} is_simulation={serverInformation.IsSimulation.ToString().ToLowerInvariant()} " +
+                $"market_order_style={QmtMarketOrderStyleResolver.GetProtocolValue(AccountProperties.MarketOrderStyle)}");
         }
 
         public override void Disconnect()
@@ -188,6 +193,7 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 throw new ArgumentNullException(nameof(order));
             }
+            EnsureConnected();
 
             if (order.SecurityType != SecurityType.Equity ||
                 (order.Type != OrderType.Market && order.Type != OrderType.Limit) ||
@@ -201,7 +207,8 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             var utcTime = DateTime.UtcNow;
-            if (!QmtTradingEnvironmentResolver.IsOrderSubmissionAllowed(_tradingEnvironment, utcTime))
+            var accountProperties = AccountProperties;
+            if (!accountProperties.IsOrderSubmissionAllowed(utcTime))
             {
                 var chinaTime = utcTime.ConvertFromUtc(TimeZones.Shanghai);
                 Log.Trace(
@@ -224,7 +231,7 @@ namespace QuantConnect.Brokerages.Qmt
                     try
                     {
                         marketOrderSubmission = QmtMarketOrderStyleResolver.Resolve(
-                            _marketOrderStyle,
+                            accountProperties.MarketOrderStyle,
                             QmtSecurityCode.Parse(brokerageSymbol).Exchange);
                     }
                     catch (ArgumentException exception)
@@ -232,7 +239,7 @@ namespace QuantConnect.Brokerages.Qmt
                         Log.Trace(
                             $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
                             $"symbol={brokerageSymbol} market_order_style=" +
-                            $"{_marketOrderStyle}");
+                            $"{accountProperties.MarketOrderStyle}");
                         OnMessage(new BrokerageMessageEvent(
                             BrokerageMessageType.Warning,
                             "UnsupportedMarketOrderStyle",

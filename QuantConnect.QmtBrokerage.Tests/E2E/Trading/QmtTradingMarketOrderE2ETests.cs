@@ -27,7 +27,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
                 QmtTradingTestContext.IsSimulationSessionOpen(),
                 Is.False,
                 "Requires a time outside the QMT simulation session 10:00-17:00 Asia/Shanghai.");
-            _context = QmtTradingTestContext.Connect(QmtMarketOrderStyle.LatestPrice);
+            _context = QmtTradingTestContext.Connect();
             _context.Run(() =>
             {
                 var order = _context.CreateMarketOrder(QmtTradingTestContext.TradingQuantity);
@@ -73,7 +73,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
                 QmtTradingTestContext.IsSimulationSessionOpen(),
                 Is.True,
                 "Requires the QMT simulation session between 10:00 and 17:00 Asia/Shanghai.");
-            _context = QmtTradingTestContext.Connect(QmtMarketOrderStyle.LatestPrice);
+            _context = QmtTradingTestContext.Connect();
             _context.Run(() =>
             {
                 var order = _context.CreateMarketOrder(QmtTradingTestContext.TradingQuantity);

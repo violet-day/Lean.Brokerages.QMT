@@ -12,25 +12,13 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         [TestCase("own-best", QmtMarketOrderStyle.OwnBest)]
         [TestCase("immediate-or-cancel", QmtMarketOrderStyle.ImmediateOrCancel)]
         [TestCase("fill-or-kill", QmtMarketOrderStyle.FillOrKill)]
-        public void ParsesConfigurationValue(
-            string configurationValue,
+        public void MapsToProtocolValue(
+            string protocolValue,
             QmtMarketOrderStyle expectedMarketOrderStyle)
         {
             Assert.That(
-                QmtMarketOrderStyleResolver.TryParse(configurationValue, out var marketOrderStyle),
-                Is.True);
-            Assert.That(marketOrderStyle, Is.EqualTo(expectedMarketOrderStyle));
-            Assert.That(
-                QmtMarketOrderStyleResolver.GetConfigurationValue(marketOrderStyle),
-                Is.EqualTo(configurationValue));
-        }
-
-        [Test]
-        public void RejectsUnknownConfigurationValue()
-        {
-            Assert.That(
-                QmtMarketOrderStyleResolver.TryParse("market", out _),
-                Is.False);
+                QmtMarketOrderStyleResolver.GetProtocolValue(expectedMarketOrderStyle),
+                Is.EqualTo(protocolValue));
         }
     }
 }

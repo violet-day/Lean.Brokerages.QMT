@@ -210,6 +210,21 @@ def _select_account_id(configured_account_id, injected_account_id):
     return injected_account_id or configured_account_id
 
 
+def _is_simulation_runtime(runtime_paths=None):
+    if runtime_paths is None:
+        runtime_paths = (sys.executable, sys.prefix, os.getcwd())
+
+    simulation_markers = (u"\u6a21\u62df", "simulation", "simulator")
+    for runtime_path in runtime_paths:
+        normalized_runtime_path = str(runtime_path or "").lower()
+        if any(
+            marker in normalized_runtime_path
+            for marker in simulation_markers
+        ):
+            return True
+    return False
+
+
 def _attribute(value, attribute_names, default=""):
     for attribute_name in attribute_names:
         try:
@@ -1158,6 +1173,7 @@ class LeanQmtGateway(object):
             return {
                 "server_name": "lean-qmt-gateway",
                 "account_id": self.account_id,
+                "is_simulation": _is_simulation_runtime(),
             }
         if operation == "query_account":
             return {

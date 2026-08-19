@@ -148,6 +148,11 @@ namespace QuantConnect.Brokerages.Qmt
                         throw new QmtGatewayProtocolException(
                             "The QMT Gateway hello response must contain account_id.");
                     }
+                    if (helloResponse.Payload.Property("is_simulation", StringComparison.Ordinal) == null)
+                    {
+                        throw new QmtGatewayProtocolException(
+                            "The QMT Gateway hello response must contain is_simulation.");
+                    }
 
                     var serverInformation = helloResponse.ToPayload<QmtHelloPayload>();
                     if (string.IsNullOrWhiteSpace(serverInformation.AccountId))

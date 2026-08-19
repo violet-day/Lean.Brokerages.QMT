@@ -41,12 +41,34 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 Is.EqualTo(order.Id.ToString(CultureInfo.InvariantCulture)));
         }
 
-        [TestCase("600000.SH", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
-        [TestCase("000001.SZ", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
-        [TestCase("830799.BJ", QmtMarketOrderStyle.LatestPrice, "latest-price", 5, -1)]
-        [TestCase("600000.SH", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 42, 0)]
-        [TestCase("000001.SZ", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 47, 0)]
-        [TestCase("830799.BJ", QmtMarketOrderStyle.FiveLevelImmediateOrCancel, "five-level-immediate-or-cancel", 42, 0)]
+        [TestCase("600000.SH", true, "latest-price", 5, -1)]
+        [TestCase("000001.SZ", true, "latest-price", 5, -1)]
+        [TestCase("830799.BJ", true, "latest-price", 5, -1)]
+        [TestCase("600000.SH", false, "five-level-immediate-or-cancel", 42, 0)]
+        [TestCase("000001.SZ", false, "five-level-immediate-or-cancel", 47, 0)]
+        [TestCase("830799.BJ", false, "five-level-immediate-or-cancel", 42, 0)]
+        public void MapsAccountMarketOrderStyleToExchangePriceType(
+            string stockCode,
+            bool isSimulation,
+            string expectedStyle,
+            int expectedPriceType,
+            int expectedPrice)
+        {
+            var exchange = QmtSecurityCode.Parse(stockCode).Exchange;
+            var accountProperties = new QmtAccountProperties(isSimulation);
+
+            var submission = QmtMarketOrderStyleResolver.Resolve(
+                accountProperties.MarketOrderStyle,
+                exchange);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(submission.Style, Is.EqualTo(expectedStyle));
+                Assert.That(submission.PriceType, Is.EqualTo(expectedPriceType));
+                Assert.That(submission.Price, Is.EqualTo((decimal)expectedPrice));
+            });
+        }
+
         [TestCase("600000.SH", QmtMarketOrderStyle.FiveLevelImmediateToLimit, "five-level-immediate-to-limit", 43, 0)]
         [TestCase("830799.BJ", QmtMarketOrderStyle.FiveLevelImmediateToLimit, "five-level-immediate-to-limit", 43, 0)]
         [TestCase("600000.SH", QmtMarketOrderStyle.CounterpartyBest, "counterparty-best", 44, 0)]
@@ -57,32 +79,22 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         [TestCase("830799.BJ", QmtMarketOrderStyle.OwnBest, "own-best", 45, 0)]
         [TestCase("000001.SZ", QmtMarketOrderStyle.ImmediateOrCancel, "immediate-or-cancel", 46, 0)]
         [TestCase("000001.SZ", QmtMarketOrderStyle.FillOrKill, "fill-or-kill", 48, 0)]
-        public void MapsMarketOrderStyleToExchangePriceType(
+        public void MapsQmtMarketOrderStyleToExchangePriceType(
             string stockCode,
             QmtMarketOrderStyle marketOrderStyle,
             string expectedStyle,
             int expectedPriceType,
             int expectedPrice)
         {
-            var gatewayClient = new TestGatewayClient(cancellationSubmitted: true);
-            using var brokerage = new QmtBrokerage(
-                gatewayClient,
-                new TestOrderProvider(),
-                marketOrderStyle: marketOrderStyle);
-            var symbol = new QmtSymbolMapper().GetLeanSymbol(
-                stockCode,
-                SecurityType.Equity,
-                QmtSymbolMapper.MarketName);
+            var submission = QmtMarketOrderStyleResolver.Resolve(
+                marketOrderStyle,
+                QmtSecurityCode.Parse(stockCode).Exchange);
 
-            var result = brokerage.PlaceOrder(new MarketOrder(symbol, 100, DateTime.UtcNow));
-
-            Assert.That(result, Is.True);
-            Assert.That(gatewayClient.PlaceOrderRequest, Is.Not.Null);
             Assert.Multiple(() =>
             {
-                Assert.That(gatewayClient.PlaceOrderRequest!.MarketOrderStyle, Is.EqualTo(expectedStyle));
-                Assert.That(gatewayClient.PlaceOrderRequest.QmtPriceType, Is.EqualTo(expectedPriceType));
-                Assert.That(gatewayClient.PlaceOrderRequest.QmtPrice, Is.EqualTo((decimal)expectedPrice));
+                Assert.That(submission.Style, Is.EqualTo(expectedStyle));
+                Assert.That(submission.PriceType, Is.EqualTo(expectedPriceType));
+                Assert.That(submission.Price, Is.EqualTo((decimal)expectedPrice));
             });
         }
 
@@ -95,20 +107,9 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             string stockCode,
             QmtMarketOrderStyle marketOrderStyle)
         {
-            var gatewayClient = new TestGatewayClient(cancellationSubmitted: true);
-            using var brokerage = new QmtBrokerage(
-                gatewayClient,
-                new TestOrderProvider(),
-                marketOrderStyle: marketOrderStyle);
-            var symbol = new QmtSymbolMapper().GetLeanSymbol(
-                stockCode,
-                SecurityType.Equity,
-                QmtSymbolMapper.MarketName);
-
-            var result = brokerage.PlaceOrder(new MarketOrder(symbol, 100, DateTime.UtcNow));
-
-            Assert.That(result, Is.False);
-            Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
+            Assert.Throws<ArgumentException>(() => QmtMarketOrderStyleResolver.Resolve(
+                marketOrderStyle,
+                QmtSecurityCode.Parse(stockCode).Exchange));
         }
 
         [TestCase(true)]
@@ -245,11 +246,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
             public bool IsConnected { get; private set; } = true;
             public QmtPlaceOrderRequest? PlaceOrderRequest { get; private set; }
-            public QmtHelloPayload? ServerInformation { get; private set; } = new QmtHelloPayload
-            {
-                AccountId = "order-request-test",
-                ServerName = "test-gateway"
-            };
+            public QmtHelloPayload? ServerInformation { get; private set; }
 
             public event EventHandler<QmtGatewayMessageEventArgs>? EventReceived;
             public event EventHandler<QmtGatewayDisconnectedEventArgs>? Disconnected
@@ -258,9 +255,15 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 remove { }
             }
 
-            public TestGatewayClient(bool cancellationSubmitted)
+            public TestGatewayClient(bool cancellationSubmitted, bool isSimulation = false)
             {
                 _cancellationSubmitted = cancellationSubmitted;
+                ServerInformation = new QmtHelloPayload
+                {
+                    AccountId = "order-request-test",
+                    ServerName = "test-gateway",
+                    IsSimulation = isSimulation
+                };
             }
 
             public void Connect()

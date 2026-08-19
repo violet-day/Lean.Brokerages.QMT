@@ -34,6 +34,24 @@ class QmtGatewayAccountSelectionTests(unittest.TestCase):
                 "injected-account",
             )
 
+    def test_detects_simulation_qmt_runtime(self):
+        simulation_runtime_path = (
+            "C:\\Program Files (x86)\\Broker QMT\\"
+            "\u4ea4\u6613\u7aef\u6a21\u62df\\bin.x64\\XtItClient.exe"
+        )
+        self.assertTrue(
+            self.gateway_module._is_simulation_runtime(
+                [simulation_runtime_path]
+            )
+        )
+
+    def test_does_not_classify_live_qmt_runtime_as_simulation(self):
+        self.assertFalse(
+            self.gateway_module._is_simulation_runtime(
+                [r"C:\Program Files (x86)\Broker QMT\bin.x64\XtItClient.exe"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,19 +24,7 @@ namespace QuantConnect.Brokerages.Qmt
             { "qmt-gateway-host", Config.Get("qmt-gateway-host", "127.0.0.1") },
             { "qmt-gateway-port", Config.Get("qmt-gateway-port", "17890") },
             { "qmt-account-id", Config.Get("qmt-account-id") },
-            { "qmt-request-timeout", Config.Get("qmt-request-timeout", "10") },
-            {
-                "qmt-market-order-style",
-                Config.Get(
-                    "qmt-market-order-style",
-                    QmtMarketOrderStyleResolver.LatestPriceConfigurationValue)
-            },
-            {
-                "qmt-trading-environment",
-                Config.Get(
-                    "qmt-trading-environment",
-                    QmtTradingEnvironmentResolver.LiveConfigurationValue)
-            }
+            { "qmt-request-timeout", Config.Get("qmt-request-timeout", "10") }
         };
 
         public override IBrokerageModel GetBrokerageModel(IOrderProvider orderProvider)
@@ -61,29 +49,11 @@ namespace QuantConnect.Brokerages.Qmt
             var port = Read<int>(job.BrokerageData, "qmt-gateway-port", errors);
             var accountId = Read<string>(job.BrokerageData, "qmt-account-id", errors);
             var requestTimeoutSeconds = Read<int>(job.BrokerageData, "qmt-request-timeout", errors);
-            var marketOrderStyleText = Read<string>(job.BrokerageData, "qmt-market-order-style", errors);
-            var marketOrderStyle = QmtMarketOrderStyle.LatestPrice;
-            var tradingEnvironmentText = Read<string>(job.BrokerageData, "qmt-trading-environment", errors);
-            var tradingEnvironment = QmtTradingEnvironment.Live;
 
             if (requestTimeoutSeconds <= 0)
             {
                 errors.Add("qmt-request-timeout must be greater than zero seconds.");
             }
-            if (!QmtMarketOrderStyleResolver.TryParse(marketOrderStyleText, out marketOrderStyle))
-            {
-                errors.Add(
-                    $"qmt-market-order-style '{marketOrderStyleText}' is invalid. " +
-                    "Use latest-price, five-level-immediate-or-cancel, five-level-immediate-to-limit, " +
-                    "counterparty-best, own-best, immediate-or-cancel, or fill-or-kill.");
-            }
-            if (!QmtTradingEnvironmentResolver.TryParse(tradingEnvironmentText, out tradingEnvironment))
-            {
-                errors.Add(
-                    $"qmt-trading-environment '{tradingEnvironmentText}' is invalid. " +
-                    "Use live or simulation.");
-            }
-
             if (errors.Count != 0)
             {
                 throw new ArgumentException(string.Join(Environment.NewLine, errors));
@@ -94,11 +64,7 @@ namespace QuantConnect.Brokerages.Qmt
                 port,
                 accountId,
                 TimeSpan.FromSeconds(requestTimeoutSeconds));
-            var brokerage = new QmtBrokerage(
-                gatewayClient,
-                algorithm.Transactions,
-                marketOrderStyle: marketOrderStyle,
-                tradingEnvironment: tradingEnvironment);
+            var brokerage = new QmtBrokerage(gatewayClient, algorithm.Transactions);
             Composer.Instance.AddPart<IDataQueueHandler>(brokerage);
             return brokerage;
         }

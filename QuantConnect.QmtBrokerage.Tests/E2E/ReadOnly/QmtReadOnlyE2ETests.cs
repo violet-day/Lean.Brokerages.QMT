@@ -62,7 +62,11 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
 
                 Assert.That(_brokerage.IsConnected, Is.True);
                 Assert.That(_gatewayClient.ServerInformation?.AccountId, Is.EqualTo(accountId));
-                WriteEvidence(stage, "account_match=true");
+                Assert.That(
+                    _brokerage.AccountProperties.IsSimulation,
+                    Is.True,
+                    "The connected QMT runtime is not identified as the simulation account.");
+                WriteEvidence(stage, "account_match=true is_simulation=true");
             }
             catch (Exception exception)
             {

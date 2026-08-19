@@ -52,8 +52,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             Brokerage.OrdersStatusChanged += HandleOrderStatusChanged;
         }
 
-        public static QmtTradingTestContext Connect(
-            QmtMarketOrderStyle marketOrderStyle = QmtMarketOrderStyle.LatestPrice)
+        public static QmtTradingTestContext Connect()
         {
             const string stage = "connect";
             QmtTradingTestContext? context = null;
@@ -84,9 +83,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                     TimeSpan.FromSeconds(10));
                 var brokerage = new QmtBrokerage(
                     gatewayClient,
-                    orderProvider,
-                    marketOrderStyle: marketOrderStyle,
-                    tradingEnvironment: QmtTradingEnvironment.Simulation);
+                    orderProvider);
                 context = new QmtTradingTestContext(
                     algorithm,
                     orderProvider,
@@ -96,12 +93,16 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
 
                 Assert.That(brokerage.IsConnected, Is.True);
                 Assert.That(gatewayClient.ServerInformation?.AccountId, Is.EqualTo(expectedAccountId));
+                Assert.That(
+                    brokerage.AccountProperties.IsSimulation,
+                    Is.True,
+                    "The connected QMT runtime is not identified as the simulation account.");
                 WriteEvidence(
                     stage,
                     "ok",
                     $"account_id={expectedAccountId} account_match=true " +
-                    $"market_order_style={QmtMarketOrderStyleResolver.GetConfigurationValue(marketOrderStyle)} " +
-                    "trading_environment=simulation");
+                    $"is_simulation={brokerage.AccountProperties.IsSimulation.ToString().ToLowerInvariant()} " +
+                    $"market_order_style={QmtMarketOrderStyleResolver.GetProtocolValue(brokerage.AccountProperties.MarketOrderStyle)}");
                 return context;
             }
             catch (Exception exception)
@@ -114,14 +115,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
 
         public static bool IsSimulationSessionOpen()
         {
-            var chinaTime = DateTime.UtcNow.ConvertFromUtc(TimeZones.Shanghai);
-            if (chinaTime.DayOfWeek == DayOfWeek.Saturday ||
-                chinaTime.DayOfWeek == DayOfWeek.Sunday)
-            {
-                return false;
-            }
-            return chinaTime.TimeOfDay >= TimeSpan.FromHours(10) &&
-                chinaTime.TimeOfDay < TimeSpan.FromHours(17);
+            return new QmtAccountProperties(true).IsOrderSubmissionAllowed(DateTime.UtcNow);
         }
 
         public void Run(Action testCase)

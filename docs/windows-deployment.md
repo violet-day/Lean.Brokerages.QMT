@@ -105,20 +105,11 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
   --detach
 ```
 
-测试账号在 `lean-qmt.json` 中使用：
-
-```json
-{
-  "qmt-trading-environment": "simulation",
-  "qmt-market-order-style": "latest-price"
-}
-```
-
-该值对应 QMT `price_type=5`，只是最新价选价。真实账户需要交易所原生五档市价时改为
-`qmt-trading-environment=live` 和 `five-level-immediate-or-cancel`，Brokerage
-会将沪市/北市映射为 `42`、深市映射为 `47`。QMT 模拟交易不支持原生股票市价类型
-`42-48`，配置不会自动降级。模拟模式在工作日 10:00–17:00 之外会在调用 QMT 前
-明确拒单，避免 `passorder` 静默丢弃请求。
+不需要在 `lean-qmt.json` 配置模拟/实盘或 MarketOrder style。Gateway hello 会从
+当前运行的 QMT 终端自动返回账号属性：模拟终端使用最新价 `price_type=5`；实盘终端
+使用 `five-level-immediate-or-cancel`，沪市/北市映射为 `42`、深市映射为 `47`。
+QMT 模拟交易不支持原生股票市价类型 `42-48`。模拟账号在工作日 10:00–17:00 之外
+会在调用 QMT 前明确拒单，避免 `passorder` 静默丢弃请求。
 
 先验证资金、持仓、未完成委托和实时行情，再在确认当前 QMT 账号后显式运行交易测试。
 
