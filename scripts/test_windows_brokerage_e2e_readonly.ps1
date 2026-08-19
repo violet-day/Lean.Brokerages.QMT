@@ -46,15 +46,22 @@ function Invoke-StreamingTestCommand {
     )
 
     $outputLines = New-Object System.Collections.Generic.List[string]
-    & $Executable @Arguments 2>&1 | ForEach-Object {
-        $line = [string]$_
-        [void]$outputLines.Add($line)
-        [System.IO.File]::AppendAllText($privateLogPath, $line + "`r`n", $utf8Encoding)
-        if ($line -match "\[qmt-task\]|\[qmt-e2e\]") {
-            [Console]::Error.WriteLine($line)
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Executable @Arguments 2>&1 | ForEach-Object {
+            $line = [string]$_
+            [void]$outputLines.Add($line)
+            [System.IO.File]::AppendAllText($privateLogPath, $line + "`r`n", $utf8Encoding)
+            if ($line -match "\[qmt-task\]|\[qmt-e2e\]") {
+                [Console]::Error.WriteLine($line)
+            }
         }
+        $exitCode = $LASTEXITCODE
     }
-    $exitCode = $LASTEXITCODE
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
     return [PSCustomObject]@{
         ExitCode = $exitCode
