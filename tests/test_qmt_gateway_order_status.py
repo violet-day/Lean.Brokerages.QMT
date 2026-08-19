@@ -96,6 +96,26 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         self.assertEqual(1, len(passorder_arguments))
         self.assertEqual("42", passorder_arguments[0][9])
 
+    def test_preserves_raw_passorder_result(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="order-status-test",
+            passorder_function=lambda *arguments: -1,
+        )
+
+        response = gateway._place_order(
+            {
+                "client_order_id": "raw-result",
+                "stock_code": "600000.SH",
+                "order_type": "limit",
+                "direction": "buy",
+                "quantity": 100,
+                "limit_price": 10.5,
+            }
+        )
+
+        self.assertEqual("-1", response["passorder_result"])
+
     def test_maps_market_order_styles_to_qmt_price_types(self):
         test_cases = (
             ("600000.SH", "latest-price", 5, -1.0),
@@ -213,8 +233,12 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         self.assertEqual(52, event_message["payload"]["submit_status"])
         self.assertEqual(1001, event_message["payload"]["error_id"])
         self.assertEqual(
-            "callback rejection",
+            "price outside limit",
             event_message["payload"]["error_message"],
+        )
+        self.assertEqual(
+            "callback rejection",
+            event_message["payload"]["callback_error_message"],
         )
 
 

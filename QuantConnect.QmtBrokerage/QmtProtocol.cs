@@ -231,6 +231,9 @@ namespace QuantConnect.Brokerages.Qmt
         [JsonProperty("error_message")]
         public string ErrorMessage { get; set; } = string.Empty;
 
+        [JsonProperty("callback_error_message")]
+        public string CallbackErrorMessage { get; set; } = string.Empty;
+
         [JsonProperty("cancel_information")]
         public string CancelInformation { get; set; } = string.Empty;
 
@@ -281,6 +284,9 @@ namespace QuantConnect.Brokerages.Qmt
 
         [JsonProperty("native_order_id")]
         public string NativeOrderId { get; set; } = string.Empty;
+
+        [JsonProperty("passorder_result")]
+        public string PassOrderResult { get; set; } = string.Empty;
     }
 
     public sealed class QmtCancelOrderRequest

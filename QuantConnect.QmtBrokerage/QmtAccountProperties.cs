@@ -9,10 +9,6 @@ namespace QuantConnect.Brokerages.Qmt
     {
         public bool IsSimulation { get; }
 
-        public QmtMarketOrderStyle MarketOrderStyle => IsSimulation
-            ? QmtMarketOrderStyle.LatestPrice
-            : QmtMarketOrderStyle.FiveLevelImmediateOrCancel;
-
         public QmtAccountProperties(bool isSimulation)
         {
             IsSimulation = isSimulation;

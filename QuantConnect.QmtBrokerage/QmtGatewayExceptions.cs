@@ -41,4 +41,15 @@ namespace QuantConnect.Brokerages.Qmt
         {
         }
     }
+
+    public sealed class QmtOrderSubmissionException : QmtGatewayException
+    {
+        public string ErrorCode { get; }
+
+        public QmtOrderSubmissionException(string errorCode, string errorMessage)
+            : base($"QMT order submission failed ({errorCode}): {errorMessage}")
+        {
+            ErrorCode = errorCode;
+        }
+    }
 }

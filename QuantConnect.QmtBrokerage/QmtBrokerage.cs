@@ -26,6 +26,7 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
+        private readonly ITimeProvider _timeProvider;
         private QmtAccountProperties? _accountProperties;
         private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<Symbol, SubscriptionState>();
@@ -53,12 +54,14 @@ namespace QuantConnect.Brokerages.Qmt
         public QmtBrokerage(
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
-            QmtSymbolMapper? symbolMapper = null)
+            QmtSymbolMapper? symbolMapper = null,
+            ITimeProvider? timeProvider = null)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
+            _timeProvider = timeProvider ?? RealTimeProvider.Instance;
             if (_gatewayClient.ServerInformation != null)
             {
                 _accountProperties = new QmtAccountProperties(
@@ -80,7 +83,7 @@ namespace QuantConnect.Brokerages.Qmt
             Log.Trace(
                 $"QmtBrokerage.Connect(): stage=connect status=ok account_id={serverInformation.AccountId} " +
                 $"server={serverInformation.ServerName} is_simulation={serverInformation.IsSimulation.ToString().ToLowerInvariant()} " +
-                $"market_order_style={QmtMarketOrderStyleResolver.GetProtocolValue(AccountProperties.MarketOrderStyle)}");
+                "market_order_style=order-property");
         }
 
         public override void Disconnect()
@@ -206,21 +209,6 @@ namespace QuantConnect.Brokerages.Qmt
                 return false;
             }
 
-            var utcTime = DateTime.UtcNow;
-            var accountProperties = AccountProperties;
-            if (!accountProperties.IsOrderSubmissionAllowed(utcTime))
-            {
-                var chinaTime = utcTime.ConvertFromUtc(TimeZones.Shanghai);
-                Log.Trace(
-                    $"QmtBrokerage.PlaceOrder(): status=market-closed lean_order_id={order.Id} " +
-                    $"trading_environment=simulation china_time={chinaTime:O}");
-                OnMessage(new BrokerageMessageEvent(
-                    BrokerageMessageType.Warning,
-                    "MarketClosed",
-                    "The QMT simulation account accepts orders only on weekdays from 10:00 to 17:00 Asia/Shanghai."));
-                return false;
-            }
-
             try
             {
                 var clientOrderId = order.Id.ToStringInvariant();
@@ -228,10 +216,23 @@ namespace QuantConnect.Brokerages.Qmt
                 QmtMarketOrderSubmission? marketOrderSubmission = null;
                 if (order.Type == OrderType.Market)
                 {
+                    if (order.Properties is not QmtOrderProperties qmtOrderProperties ||
+                        !qmtOrderProperties.MarketOrderStyle.HasValue)
+                    {
+                        Log.Trace(
+                            $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
+                            $"symbol={brokerageSymbol} reason=missing-market-order-style");
+                        OnMessage(new BrokerageMessageEvent(
+                            BrokerageMessageType.Warning,
+                            "MissingMarketOrderStyle",
+                            "QMT market orders require QmtOrderProperties.MarketOrderStyle."));
+                        return false;
+                    }
+
                     try
                     {
                         marketOrderSubmission = QmtMarketOrderStyleResolver.Resolve(
-                            accountProperties.MarketOrderStyle,
+                            qmtOrderProperties.MarketOrderStyle.Value,
                             QmtSecurityCode.Parse(brokerageSymbol).Exchange);
                     }
                     catch (ArgumentException exception)
@@ -239,7 +240,7 @@ namespace QuantConnect.Brokerages.Qmt
                         Log.Trace(
                             $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
                             $"symbol={brokerageSymbol} market_order_style=" +
-                            $"{accountProperties.MarketOrderStyle}");
+                            $"{qmtOrderProperties.MarketOrderStyle.Value}");
                         OnMessage(new BrokerageMessageEvent(
                             BrokerageMessageType.Warning,
                             "UnsupportedMarketOrderStyle",
@@ -247,6 +248,30 @@ namespace QuantConnect.Brokerages.Qmt
                         return false;
                     }
                 }
+                else if (order.Properties is QmtOrderProperties { MarketOrderStyle: not null })
+                {
+                    Log.Trace(
+                        $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
+                        $"symbol={brokerageSymbol} reason=market-order-style-on-limit-order");
+                    OnMessage(new BrokerageMessageEvent(
+                        BrokerageMessageType.Warning,
+                        "UnexpectedMarketOrderStyle",
+                        "QmtOrderProperties.MarketOrderStyle can be used only with a market order."));
+                    return false;
+                }
+
+                var utcTime = _timeProvider.GetUtcNow();
+                if (!AccountProperties.IsOrderSubmissionAllowed(utcTime))
+                {
+                    var chinaTime = utcTime.ConvertFromUtc(TimeZones.Shanghai);
+                    Log.Trace(
+                        $"QmtBrokerage.PlaceOrder(): status=market-closed lean_order_id={order.Id} " +
+                        $"trading_environment=simulation china_time={chinaTime:O}");
+                    throw new QmtOrderSubmissionException(
+                        "MarketClosed",
+                        "The QMT simulation account accepts orders only on weekdays from 10:00 to 17:00 Asia/Shanghai.");
+                }
+
                 var response = SendRequest(QmtProtocol.Operations.PlaceOrder, new QmtPlaceOrderRequest
                 {
                     ClientOrderId = clientOrderId,
@@ -277,6 +302,7 @@ namespace QuantConnect.Brokerages.Qmt
                 Log.Trace(
                     $"QmtBrokerage.PlaceOrder(): status=accepted lean_order_id={order.Id} " +
                     $"native_order_id={(string.IsNullOrWhiteSpace(result.NativeOrderId) ? "pending" : result.NativeOrderId)} " +
+                    $"qmt_passorder_result={result.PassOrderResult} " +
                     $"symbol={order.Symbol.Value} type={order.Type} direction={order.Direction} quantity={Math.Abs(order.Quantity)}" +
                     (marketOrderSubmission.HasValue
                         ? $" market_order_style={marketOrderSubmission.Value.Style} " +
@@ -284,6 +310,10 @@ namespace QuantConnect.Brokerages.Qmt
                             $"qmt_price={marketOrderSubmission.Value.Price.ToStringInvariant()}"
                         : string.Empty));
                 return true;
+            }
+            catch (QmtOrderSubmissionException)
+            {
+                throw;
             }
             catch (Exception exception)
             {
@@ -750,14 +780,25 @@ namespace QuantConnect.Brokerages.Qmt
 
         private static string GetOrderEventMessage(QmtOrderEventPayload orderUpdate)
         {
-            var statusInformation = !string.IsNullOrWhiteSpace(orderUpdate.CancelInformation)
-                ? orderUpdate.CancelInformation.Trim()
-                : orderUpdate.ErrorMessage?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(statusInformation))
+            var rawMessages = new List<string>();
+            if (!string.IsNullOrWhiteSpace(orderUpdate.ErrorMessage))
+            {
+                rawMessages.Add($"error_message={orderUpdate.ErrorMessage.Trim()}");
+            }
+            if (!string.IsNullOrWhiteSpace(orderUpdate.CallbackErrorMessage))
+            {
+                rawMessages.Add($"callback_error_message={orderUpdate.CallbackErrorMessage.Trim()}");
+            }
+            if (!string.IsNullOrWhiteSpace(orderUpdate.CancelInformation))
+            {
+                rawMessages.Add($"cancel_information={orderUpdate.CancelInformation.Trim()}");
+            }
+            if (rawMessages.Count == 0)
             {
                 return orderUpdate.Remark;
             }
 
+            var statusInformation = string.Join("; ", rawMessages);
             return orderUpdate.ErrorId == 0
                 ? statusInformation
                 : $"QMT error {orderUpdate.ErrorId}: {statusInformation}";

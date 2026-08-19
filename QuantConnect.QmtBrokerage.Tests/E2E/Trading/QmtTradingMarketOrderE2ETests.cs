@@ -30,37 +30,23 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
             _context = QmtTradingTestContext.Connect();
             _context.Run(() =>
             {
-                var order = _context.CreateMarketOrder(QmtTradingTestContext.TradingQuantity);
+                var order = _context.CreateMarketOrder(
+                    QmtTradingTestContext.TradingQuantity,
+                    QmtMarketOrderStyle.LatestPrice);
                 _context.WriteStage(
                     "market-order",
                     "start",
                     $"stock_code={QmtTradingTestContext.TradingStockCode} quantity={order.Quantity} " +
                     "market_order_style=latest-price qmt_price_type=5");
-                var requestAccepted = _context.Brokerage.PlaceOrder(order);
-                if (requestAccepted)
-                {
-                    Assert.That(
-                        _context.WaitForStatus(
-                            order,
-                            TimeSpan.FromSeconds(30),
-                            OrderStatus.Invalid,
-                            OrderStatus.Submitted,
-                            OrderStatus.PartiallyFilled,
-                            OrderStatus.Filled),
-                        Is.EqualTo(OrderStatus.Invalid),
-                        "QMT did not reject the latest-price market order outside simulation hours.");
-                }
+                var exception = Assert.Throws<QmtOrderSubmissionException>(() =>
+                    _context.Brokerage.PlaceOrder(order));
+                Assert.That(exception!.ErrorCode, Is.EqualTo("MarketClosed"));
                 var orderSnapshot = _context.FindOrderSnapshot(order);
-                Assert.That(
-                    orderSnapshot == null ||
-                        QmtOrderStatusMapper.GetLeanOrderStatus(orderSnapshot.Status) == OrderStatus.Invalid,
-                    Is.True,
-                    "query_orders contains a non-rejected latest-price market order submitted outside simulation hours.");
+                Assert.That(orderSnapshot, Is.Null, "The locally rejected market order reached query_orders.");
                 _context.WriteStage(
                     "market-order",
                     "ok",
-                    $"request_accepted={requestAccepted.ToString().ToLowerInvariant()} " +
-                    $"final_status={(requestAccepted ? "Invalid" : "RejectedBeforeGateway")}");
+                    "error_code=MarketClosed gateway_received=false order_found=false");
             });
         }
 
@@ -76,7 +62,9 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
             _context = QmtTradingTestContext.Connect();
             _context.Run(() =>
             {
-                var order = _context.CreateMarketOrder(QmtTradingTestContext.TradingQuantity);
+                var order = _context.CreateMarketOrder(
+                    QmtTradingTestContext.TradingQuantity,
+                    QmtMarketOrderStyle.LatestPrice);
                 _context.WriteStage(
                     "market-order",
                     "start",

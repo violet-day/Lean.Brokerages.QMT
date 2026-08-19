@@ -7,19 +7,13 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     [TestFixture]
     public class QmtAccountPropertiesTests
     {
-        [TestCase(true, QmtMarketOrderStyle.LatestPrice)]
-        [TestCase(false, QmtMarketOrderStyle.FiveLevelImmediateOrCancel)]
-        public void SelectsMarketOrderStyleFromAccount(
-            bool isSimulation,
-            QmtMarketOrderStyle expectedMarketOrderStyle)
+        [TestCase(true)]
+        [TestCase(false)]
+        public void ReportsAccountType(bool isSimulation)
         {
             var accountProperties = new QmtAccountProperties(isSimulation);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(accountProperties.IsSimulation, Is.EqualTo(isSimulation));
-                Assert.That(accountProperties.MarketOrderStyle, Is.EqualTo(expectedMarketOrderStyle));
-            });
+            Assert.That(accountProperties.IsSimulation, Is.EqualTo(isSimulation));
         }
 
         [TestCase("2026-08-19T01:59:59Z", false)]
@@ -27,7 +21,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         [TestCase("2026-08-19T08:59:59Z", true)]
         [TestCase("2026-08-19T09:00:00Z", false)]
         [TestCase("2026-08-22T04:00:00Z", false)]
-        public void EnforcesSimulationOrderSession(string utcTimeText, bool expectedAllowed)
+        public void ReportsSimulationOrderSession(string utcTimeText, bool expectedAllowed)
         {
             var utcTime = DateTime.Parse(
                 utcTimeText,

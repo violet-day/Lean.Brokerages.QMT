@@ -101,8 +101,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                     stage,
                     "ok",
                     $"account_id={expectedAccountId} account_match=true " +
-                    $"is_simulation={brokerage.AccountProperties.IsSimulation.ToString().ToLowerInvariant()} " +
-                    $"market_order_style={QmtMarketOrderStyleResolver.GetProtocolValue(brokerage.AccountProperties.MarketOrderStyle)}");
+                    $"is_simulation={brokerage.AccountProperties.IsSimulation.ToString().ToLowerInvariant()}");
                 return context;
             }
             catch (Exception exception)
@@ -133,14 +132,18 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             }
         }
 
-        public Order CreateMarketOrder(decimal quantity)
+        public Order CreateMarketOrder(decimal quantity, QmtMarketOrderStyle marketOrderStyle)
         {
-            return CreateOrder(OrderType.Market, quantity, 0m);
+            return CreateOrder(
+                OrderType.Market,
+                quantity,
+                0m,
+                new QmtOrderProperties { MarketOrderStyle = marketOrderStyle });
         }
 
         public LimitOrder CreateLimitOrder(decimal quantity, decimal limitPrice)
         {
-            return (LimitOrder)CreateOrder(OrderType.Limit, quantity, limitPrice);
+            return (LimitOrder)CreateOrder(OrderType.Limit, quantity, limitPrice, null);
         }
 
         public decimal GetNonMarketableBuyPrice()
@@ -316,7 +319,11 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             }
         }
 
-        private Order CreateOrder(OrderType orderType, decimal quantity, decimal limitPrice)
+        private Order CreateOrder(
+            OrderType orderType,
+            decimal quantity,
+            decimal limitPrice,
+            QmtOrderProperties? orderProperties)
         {
             var submitOrderRequest = new SubmitOrderRequest(
                 orderType,
@@ -326,7 +333,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 0m,
                 limitPrice,
                 DateTime.UtcNow,
-                string.Empty);
+                string.Empty,
+                orderProperties);
             _algorithm.Transactions.SetOrderId(submitOrderRequest);
             var order = Order.CreateOrder(submitOrderRequest);
             _orderProvider.Add(order);
@@ -353,10 +361,12 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 }
                 receivedStatuses.Enqueue(orderEvent.Status);
                 statusChanged.Set();
+                var orderMessage = orderEvent.Message.Replace("\"", "'").Replace("\r", " ").Replace("\n", " ");
                 WriteEvidence(
                     "order-callback",
                     "ok",
-                    $"lean_order_id={orderEvent.OrderId} status={orderEvent.Status}");
+                    $"lean_order_id={orderEvent.OrderId} status={orderEvent.Status}" +
+                    (string.IsNullOrWhiteSpace(orderMessage) ? string.Empty : $" message=\"{orderMessage}\""));
             }
         }
 

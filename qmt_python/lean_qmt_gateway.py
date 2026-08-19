@@ -903,13 +903,17 @@ class LeanQmtGateway(object):
         payload = _normalize_order(order_args)
         callback_error_message = str(error_message or "").strip()
         if callback_error_message:
-            payload["error_message"] = callback_error_message
+            payload["callback_error_message"] = callback_error_message
         self._publish_event("order", payload)
         _log(
             "order_error_event",
+            callback_error_message=callback_error_message,
+            cancel_information=payload["cancel_information"],
+            client_order_id=payload["client_order_id"],
             error_id=payload["error_id"],
             error_message=payload["error_message"],
             order_id=payload["order_id"],
+            stock_code=payload["stock_code"],
             status=payload["status"],
             submit_status=payload["submit_status"],
         )
@@ -1411,7 +1415,7 @@ class LeanQmtGateway(object):
         strategy_name = str(
             payload.get("strategy_name") or self.strategy_name
         ).strip()
-        self.passorder_function(
+        passorder_result = self.passorder_function(
             operation_type,
             1101,
             self.account_id,
@@ -1430,6 +1434,7 @@ class LeanQmtGateway(object):
             direction=direction,
             market_order_style=market_order_style or "none",
             order_type=order_type,
+            passorder_result=repr(passorder_result),
             price=model_price,
             price_type=price_type,
             quantity=int(quantity),
@@ -1439,6 +1444,7 @@ class LeanQmtGateway(object):
             "accepted": True,
             "client_order_id": client_order_id,
             "native_order_id": "",
+            "passorder_result": repr(passorder_result),
         }
 
     def _cancel_order(self, payload):
