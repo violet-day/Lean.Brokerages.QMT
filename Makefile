@@ -6,7 +6,15 @@ export QMT_ROOT_TASK
 
 task_path = $(if $(filter $(1),$(QMT_ROOT_TASK)),$(QMT_ROOT_TASK),$(QMT_ROOT_TASK) > $(1))
 
-.PHONY: sync-windows package-windows test test-readonly test-smoke test-trading test-trading-inventory
+LEAN_PYTHON_EXECUTABLE := /Users/Nemo/Workspace/quant/lean-project/.venv/bin/python
+QMT_PUSH_REPOSITORY ?= true
+qmt_push_option = $(if $(filter false 0 no,$(QMT_PUSH_REPOSITORY)),--no-push,)
+
+.PHONY: install-python-stubs sync-windows package-windows test test-readonly test-smoke test-trading test-trading-inventory
+
+install-python-stubs:
+	@echo '[qmt-task] $(call task_path,install-python-stubs)'
+	@$(LEAN_PYTHON_EXECUTABLE) -m pip install --upgrade ./python_stubs
 
 test:
 	@echo '[qmt-task] $(call task_path,test)'
@@ -19,7 +27,7 @@ sync-windows:
 
 package-windows:
 	@echo '[qmt-task] $(call task_path,package-windows)'
-	@QMT_TASK_PATH='$(call task_path,package-windows)' ./scripts/sync_worktree_to_windows.sh --package
+	@QMT_TASK_PATH='$(call task_path,package-windows)' ./scripts/sync_worktree_to_windows.sh --package $(qmt_push_option)
 
 test-readonly: package-windows
 	@QMT_TASK_PATH='$(call task_path,test-readonly)' ./scripts/run_windows_deployment.sh test-readonly --skip-sync

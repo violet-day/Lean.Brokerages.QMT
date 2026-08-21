@@ -7,17 +7,35 @@ windows_git_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
 windows_workspace_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
 windows_workspace_manifest_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace-files'
 windows_action='sync'
+push_repository=true
 parent_task_path="${QMT_TASK_PATH:-}"
 test_task_path="${parent_task_path:-${QMT_ROOT_TASK:-test}}"
 
-if [[ "${1:-}" == "--test" ]]; then
-    windows_action='test'
-elif [[ "${1:-}" == "--package" ]]; then
-    windows_action='package'
-elif [[ -n "${1:-}" ]]; then
-    echo "usage: $0 [--test|--package]" >&2
-    exit 2
-fi
+for argument in "$@"; do
+    case "$argument" in
+        --test)
+            if [[ "$windows_action" != 'sync' ]]; then
+                echo "usage: $0 [--test|--package] [--no-push]" >&2
+                exit 2
+            fi
+            windows_action='test'
+            ;;
+        --package)
+            if [[ "$windows_action" != 'sync' ]]; then
+                echo "usage: $0 [--test|--package] [--no-push]" >&2
+                exit 2
+            fi
+            windows_action='package'
+            ;;
+        --no-push)
+            push_repository=false
+            ;;
+        *)
+            echo "usage: $0 [--test|--package] [--no-push]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 test_log_directory="$repository_directory/.test-logs"
 windows_test_log_name='windows-test.log'
@@ -50,9 +68,13 @@ snapshot_file_count="$(list_snapshot_files | tr -cd '\0' | wc -c | tr -d ' ')"
 snapshot_change_count="$(git -C "$repository_directory" status --porcelain | wc -l | tr -d ' ')"
 sync_started_at_seconds="$(date +%s)"
 
-echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch commit=$repository_commit"
-git -C "$repository_directory" push origin "HEAD:refs/heads/$repository_branch"
-echo "[qmt-test] host=mac stage=git-push status=ok branch=$repository_branch commit=$repository_commit"
+if [[ "$push_repository" == true ]]; then
+    echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch commit=$repository_commit"
+    git -C "$repository_directory" push origin "HEAD:refs/heads/$repository_branch"
+    echo "[qmt-test] host=mac stage=git-push status=ok branch=$repository_branch commit=$repository_commit"
+else
+    echo "[qmt-test] host=mac stage=git-push status=skipped reason=local-snapshot branch=$repository_branch commit=$repository_commit"
+fi
 
 invoke_windows_powershell() {
     local remote_command="$1"
@@ -61,7 +83,11 @@ invoke_windows_powershell() {
     zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command"
 }
 
-prepare_workspace_command="\$ErrorActionPreference = 'Stop'; git -C '$windows_git_repository_directory' fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; if (-not (Test-Path -LiteralPath '$windows_workspace_directory')) { git -C '$windows_git_repository_directory' worktree add --detach '$windows_workspace_directory' '$repository_commit'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } }; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } else { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit'"
+if [[ "$push_repository" == true ]]; then
+    prepare_workspace_command="\$ErrorActionPreference = 'Stop'; git -C '$windows_git_repository_directory' fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; if (-not (Test-Path -LiteralPath '$windows_workspace_directory')) { git -C '$windows_git_repository_directory' worktree add --detach '$windows_workspace_directory' '$repository_commit'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } }; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } else { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=git'"
+else
+    prepare_workspace_command="\$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Path '$windows_workspace_directory' -Force | Out-Null; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } elseif (Test-Path -LiteralPath '$windows_workspace_directory\.git') { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) } else { \$previousSnapshotFiles = @() }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=local-snapshot'"
+fi
 
 extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [Console]::In.ReadToEnd(); \$archivePath = [System.IO.Path]::GetTempFileName(); try { [System.IO.File]::WriteAllBytes(\$archivePath, [Convert]::FromBase64String(\$archiveBase64)); \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf \$archivePath -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } } finally { Remove-Item -LiteralPath \$archivePath -Force -ErrorAction SilentlyContinue }"
 

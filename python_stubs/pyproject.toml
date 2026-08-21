@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantconnect-qmt-stubs"
+version = "0.1.0"
+description = "Python type stubs and runtime namespace loader for QuantConnect.Brokerages.Qmt"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["quantconnect-stubs==17577"]
+
+[tool.setuptools]
+packages = ["QuantConnect.Brokerages.Qmt"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"QuantConnect.Brokerages.Qmt" = ["__init__.pyi", "py.typed"]

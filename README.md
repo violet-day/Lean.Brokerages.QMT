@@ -64,6 +64,35 @@ session before calling QMT because `passorder` otherwise drops them without an
 order or rejection callback. QMT documents native stock market price types `42`
 through `48` as unavailable in simulation trading.
 
+## Python 策略类型存根
+
+将 QMT 类型包安装到编写 LEAN 策略时使用的 Python 环境中：
+
+```bash
+make install-python-stubs
+```
+
+该包为策略使用的 QMT API 提供静态类型，并在策略通过 LEAN 运行时使用
+Python.NET 加载真正的 `QuantConnect.Brokerages.Qmt` 程序集。QMT DLL 仍须作为
+LEAN Brokerage 模块安装。
+
+```python
+from QuantConnect.Brokerages.Qmt import (
+    QmtBrokerageModel,
+    QmtMarketOrderStyle,
+    QmtOrderProperties,
+)
+
+self.set_brokerage_model(QmtBrokerageModel())
+
+order_properties = QmtOrderProperties()
+order_properties.market_order_style = QmtMarketOrderStyle.LATEST_PRICE
+self.market_order(symbol, 100, order_properties=order_properties)
+```
+
+市场单样式是可选项。未指定时，Brokerage 会为模拟账户选择
+`latest-price`，为实盘账户选择 `five-level-immediate-or-cancel`。
+
 ## Repository layout
 
 ```text
@@ -84,6 +113,8 @@ qmt_python/
   lean_qmt_gateway.py         Reloadable Gateway implementation
   qmt_local_config.example.py Local configuration template
   qmt_readonly_probe_entry.py Earlier read-only diagnostic entry
+python_stubs/
+  QuantConnect/Brokerages/Qmt QMT strategy type stubs and runtime loader
 tests/
   test_python_compatibility.py QMT Python 3.6 syntax validation
 scripts/
