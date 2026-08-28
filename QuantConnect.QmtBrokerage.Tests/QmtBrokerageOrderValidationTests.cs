@@ -25,11 +25,14 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     MarketOrderStyle = QmtMarketOrderStyle.LatestPrice
                 });
 
-            var accepted = brokerage.PlaceOrder(order);
+            var exception = Assert.Throws<QmtOrderSubmissionException>(() => brokerage.PlaceOrder(order));
 
             Assert.Multiple(() =>
             {
-                Assert.That(accepted, Is.False);
+                Assert.That(exception!.ErrorCode, Is.EqualTo("UnsupportedOrder"));
+                Assert.That(
+                    exception.Message,
+                    Does.Contain("whole-share A-share Market and Limit orders"));
                 Assert.That(message?.Code, Is.EqualTo("UnsupportedOrder"));
                 Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
             });

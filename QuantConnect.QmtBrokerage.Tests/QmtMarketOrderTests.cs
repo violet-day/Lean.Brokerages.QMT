@@ -94,11 +94,14 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             brokerage.Message += (_, brokerageMessage) => message = brokerageMessage;
             var order = CreateMarketOrder("600000.SH");
 
-            var accepted = brokerage.PlaceOrder(order);
+            var exception = Assert.Throws<QmtOrderSubmissionException>(() => brokerage.PlaceOrder(order));
 
             Assert.Multiple(() =>
             {
-                Assert.That(accepted, Is.False);
+                Assert.That(exception!.ErrorCode, Is.EqualTo("MissingMarketOrderStyle"));
+                Assert.That(
+                    exception.Message,
+                    Does.Contain("QmtOrderProperties.MarketOrderStyle"));
                 Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
                 Assert.That(message?.Code, Is.EqualTo("MissingMarketOrderStyle"));
             });
@@ -133,11 +136,12 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             brokerage.Message += (_, brokerageMessage) => message = brokerageMessage;
             var order = CreateMarketOrder("600000.SH", QmtMarketOrderStyle.FillOrKill);
 
-            var accepted = brokerage.PlaceOrder(order);
+            var exception = Assert.Throws<QmtOrderSubmissionException>(() => brokerage.PlaceOrder(order));
 
             Assert.Multiple(() =>
             {
-                Assert.That(accepted, Is.False);
+                Assert.That(exception!.ErrorCode, Is.EqualTo("UnsupportedMarketOrderStyle"));
+                Assert.That(exception.Message, Does.Contain("fill-or-kill"));
                 Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
                 Assert.That(message?.Code, Is.EqualTo("UnsupportedMarketOrderStyle"));
             });
@@ -161,11 +165,14 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     MarketOrderStyle = QmtMarketOrderStyle.LatestPrice
                 });
 
-            var accepted = brokerage.PlaceOrder(order);
+            var exception = Assert.Throws<QmtOrderSubmissionException>(() => brokerage.PlaceOrder(order));
 
             Assert.Multiple(() =>
             {
-                Assert.That(accepted, Is.False);
+                Assert.That(exception!.ErrorCode, Is.EqualTo("UnexpectedMarketOrderStyle"));
+                Assert.That(
+                    exception.Message,
+                    Does.Contain("can be used only with a market order"));
                 Assert.That(gatewayClient.PlaceOrderRequest, Is.Null);
                 Assert.That(message?.Code, Is.EqualTo("UnexpectedMarketOrderStyle"));
             });

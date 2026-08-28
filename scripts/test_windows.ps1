@@ -93,30 +93,60 @@ function Invoke-WindowsTestCommand {
 Push-Location $RepositoryPath
 try {
     Write-WindowsTestLog "[qmt-task] $TaskPath"
+    $calendarResourcePath = Join-Path $RepositoryPath "QuantConnect.QmtBrokerage\Resources\china-trading-calendar.json"
+    $calendarResource = Get-Content -LiteralPath $calendarResourcePath -Raw | ConvertFrom-Json
+    $calendarCoverageStart = [DateTime]::ParseExact(
+        [string]$calendarResource.coverage_start,
+        "yyyy-MM-dd",
+        [Globalization.CultureInfo]::InvariantCulture).Date
+    $calendarCoverageEnd = [DateTime]::ParseExact(
+        [string]$calendarResource.coverage_end,
+        "yyyy-MM-dd",
+        [Globalization.CultureInfo]::InvariantCulture).Date
+    $currentCalendarDate = (Get-Date).Date
+    if ($currentCalendarDate -lt $calendarCoverageStart -or $currentCalendarDate -gt $calendarCoverageEnd) {
+        throw "The QMT trading calendar does not cover $($currentCalendarDate.ToString('yyyy-MM-dd')); available range is $($calendarCoverageStart.ToString('yyyy-MM-dd')) through $($calendarCoverageEnd.ToString('yyyy-MM-dd'))."
+    }
+    Write-WindowsTestLog "[qmt-test] host=windows stage=calendar status=ok source=$($calendarResource.source) coverage_start=$($calendarCoverageStart.ToString('yyyy-MM-dd')) coverage_end=$($calendarCoverageEnd.ToString('yyyy-MM-dd')) current_date=$($currentCalendarDate.ToString('yyyy-MM-dd'))"
+
     if ([bool]$LeanVersion -ne [bool]$TargetFramework) {
         throw "LeanVersion and TargetFramework must be supplied together."
     }
     if (-not $LeanVersion) {
-        $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
-        & $dockerExecutable image inspect $EngineImage 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=start action=pull image=$EngineImage"
-            & $dockerExecutable pull $EngineImage
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not pull the default LEAN image $EngineImage."
+        $latestBuildManifestFile = Get-ChildItem -LiteralPath $ModuleRoot -Filter build-manifest.json -Recurse -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($latestBuildManifestFile) {
+            $latestBuildManifest = Get-Content -LiteralPath $latestBuildManifestFile.FullName -Raw | ConvertFrom-Json
+            $LeanVersion = [string]$latestBuildManifest.lean_version
+            $TargetFramework = [string]$latestBuildManifest.target_framework
+            if (-not $LeanVersion -or -not $TargetFramework) {
+                throw "The latest QMT build manifest does not declare its LEAN version and target framework: $($latestBuildManifestFile.FullName)"
             }
+            Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=skipped reason=verified-build-manifest lean_version=$LeanVersion target_framework=$TargetFramework"
         }
+        else {
+            $dockerExecutable = (Get-Command docker.exe -ErrorAction Stop).Source
+            & $dockerExecutable image inspect $EngineImage 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=start action=pull image=$EngineImage"
+                & $dockerExecutable pull $EngineImage
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Could not pull the default LEAN image $EngineImage."
+                }
+            }
 
-        $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
-        $TargetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
-        $LeanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
-        if (-not $TargetFramework) {
-            throw "The default LEAN image does not declare target_framework: $EngineImage"
+            $engineImageMetadata = (& $dockerExecutable image inspect $EngineImage | ConvertFrom-Json)[0]
+            $TargetFramework = [string]$engineImageMetadata.Config.Labels.target_framework
+            $LeanVersion = [string]$engineImageMetadata.Config.Labels.lean_version
+            if (-not $TargetFramework) {
+                throw "The default LEAN image does not declare target_framework: $EngineImage"
+            }
+            if (-not $LeanVersion) {
+                throw "The default LEAN image does not declare lean_version: $EngineImage"
+            }
+            Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok source=docker image=$EngineImage lean_version=$LeanVersion target_framework=$TargetFramework"
         }
-        if (-not $LeanVersion) {
-            throw "The default LEAN image does not declare lean_version: $EngineImage"
-        }
-        Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok source=docker image=$EngineImage lean_version=$LeanVersion target_framework=$TargetFramework"
     }
     else {
         Write-WindowsTestLog "[qmt-test] host=windows stage=engine-image status=ok source=explicit lean_version=$LeanVersion target_framework=$TargetFramework"
@@ -192,8 +222,11 @@ try {
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-build status=ok duration_ms=$dotnetBuildDurationMilliseconds"
     }
 
-    if (-not $EnsurePackage -or -not $buildCacheState.IsBuildCacheHit) {
-        Write-CurrentTask "csharp-tests"
+    Write-CurrentTask "csharp-tests"
+    if ($buildCacheState.IsBuildCacheHit) {
+        Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=skipped reason=build-cache-hit fingerprint=$($buildCacheState.BuildFingerprint)"
+    }
+    else {
         $dotnetTestsStartedAt = Get-Date
         Write-WindowsTestLog "[qmt-test] host=windows stage=dotnet-tests status=start project=$testProjectPath no_build=true"
         $commandExitCode = Invoke-WindowsTestCommand $dotnetExecutable @("test", $testProjectPath, "--configuration", "Release", "--no-build", "--no-restore", "--nologo", "--logger", "console;verbosity=normal", "-p:TargetFramework=$TargetFramework")

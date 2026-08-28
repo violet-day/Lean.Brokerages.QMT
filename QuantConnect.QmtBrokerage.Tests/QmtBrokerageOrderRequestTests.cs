@@ -56,6 +56,37 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Assert.That(result, Is.EqualTo(cancellationSubmitted));
         }
 
+        [TestCase(OrderStatus.Canceled)]
+        [TestCase(OrderStatus.Filled)]
+        [TestCase(OrderStatus.Invalid)]
+        public void RejectsCancellationForClosedOrder(OrderStatus orderStatus)
+        {
+            var gatewayClient = new QmtOrderTestGatewayClient(
+                cancellationSubmitted: true);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new QmtOrderTestProvider());
+            BrokerageMessageEvent? message = null;
+            brokerage.Message += (_, brokerageMessage) => message = brokerageMessage;
+            var order = new MarketOrder(
+                Symbol.Empty,
+                100,
+                DateTime.UtcNow)
+            {
+                Status = orderStatus
+            };
+            order.BrokerId.Add("native-order-1");
+
+            var result = brokerage.CancelOrder(order);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result, Is.False);
+                Assert.That(gatewayClient.CancelOrderRequest, Is.Null);
+                Assert.That(message?.Code, Is.EqualTo("CancelNotAllowed"));
+            });
+        }
+
         [Test]
         public void PublishesQmtRejectionReasonOnInvalidOrder()
         {

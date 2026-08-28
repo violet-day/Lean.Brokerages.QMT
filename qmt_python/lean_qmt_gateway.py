@@ -39,6 +39,12 @@ RUNTIME_LOG_PATH = os.environ.get(
 )
 MAXIMUM_RUNTIME_LOG_BYTES = 5 * 1024 * 1024
 RUNTIME_LOG_BACKUP_COUNT = 3
+RUNTIME_LOG_RETENTION_DAYS = 14
+HISTORICAL_ORDER_ARCHIVE_RETENTION_DAYS = 400
+HISTORICAL_ORDER_ARCHIVE_DIRECTORY = os.environ.get(
+    "QMT_HISTORICAL_ORDER_ARCHIVE_DIRECTORY",
+    os.path.join(os.path.dirname(RUNTIME_LOG_PATH), "qmt-order-history"),
+)
 MAXIMUM_MESSAGE_BYTES = 1024 * 1024
 MAXIMUM_REQUESTS_PER_HANDLEBAR = 100
 MAXIMUM_CACHED_RESPONSES = 512
@@ -46,6 +52,7 @@ REQUEST_PUMP_CALLBACK_NAME = "qmt_gateway_timer_callback"
 REQUEST_PUMP_PERIOD = "500nMilliSecond"
 REQUEST_PUMP_START_TIME = "2000-01-01 00:00:00"
 REQUEST_PUMP_MARKET = "SH"
+QUOTE_POLL_INTERVAL_SECONDS = 30.0
 NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS = 5.0
 NETWORK_RECOVERY_RETRY_SECONDS = 5.0
 MARKET_ORDER_SUBMISSIONS = {
@@ -81,6 +88,8 @@ MARKET_ORDER_SUBMISSIONS = {
     },
 }
 _runtime_log_lock = threading.Lock()
+_historical_order_archive_lock = threading.Lock()
+_last_runtime_log_cleanup_date = ""
 
 
 class _RequestError(Exception):
@@ -100,24 +109,79 @@ def _load_source(module_name, source_path):
     return module
 
 
-def _rotate_runtime_log_if_needed(incoming_byte_count):
-    if not os.path.isfile(RUNTIME_LOG_PATH):
+def _dated_runtime_log_path(log_date):
+    path_without_extension, path_extension = os.path.splitext(RUNTIME_LOG_PATH)
+    return "%s-%s%s" % (path_without_extension, log_date, path_extension)
+
+
+def _remove_expired_runtime_logs(current_log_date):
+    global _last_runtime_log_cleanup_date
+
+    if _last_runtime_log_cleanup_date == current_log_date:
+        return
+    _last_runtime_log_cleanup_date = current_log_date
+
+    runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH) or "."
+    runtime_log_filename = os.path.basename(RUNTIME_LOG_PATH)
+    filename_without_extension, filename_extension = os.path.splitext(
+        runtime_log_filename
+    )
+    dated_filename_prefix = "%s-" % filename_without_extension
+    oldest_retained_date = time.strftime(
+        "%Y-%m-%d",
+        time.localtime(
+            time.time()
+            - (RUNTIME_LOG_RETENTION_DAYS - 1) * 24 * 60 * 60
+        ),
+    )
+    try:
+        runtime_log_filenames = os.listdir(runtime_log_directory)
+    except OSError:
+        return
+
+    for runtime_log_filename in runtime_log_filenames:
+        if not runtime_log_filename.startswith(dated_filename_prefix):
+            continue
+        log_date_start_index = len(dated_filename_prefix)
+        log_date_end_index = log_date_start_index + len("YYYY-MM-DD")
+        log_date = runtime_log_filename[
+            log_date_start_index:log_date_end_index
+        ]
+        filename_suffix = runtime_log_filename[log_date_end_index:]
+        if filename_suffix != filename_extension and not filename_suffix.startswith(
+            "%s." % filename_extension
+        ):
+            continue
+        try:
+            time.strptime(log_date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if log_date >= oldest_retained_date:
+            continue
+        try:
+            os.remove(os.path.join(runtime_log_directory, runtime_log_filename))
+        except OSError:
+            pass
+
+
+def _rotate_runtime_log_if_needed(runtime_log_path, incoming_byte_count):
+    if not os.path.isfile(runtime_log_path):
         return
     if (
-        os.path.getsize(RUNTIME_LOG_PATH) + incoming_byte_count
+        os.path.getsize(runtime_log_path) + incoming_byte_count
         <= MAXIMUM_RUNTIME_LOG_BYTES
     ):
         return
 
     for backup_number in range(RUNTIME_LOG_BACKUP_COUNT, 0, -1):
         if backup_number == 1:
-            source_path = RUNTIME_LOG_PATH
+            source_path = runtime_log_path
         else:
             source_path = "%s.%d" % (
-                RUNTIME_LOG_PATH,
+                runtime_log_path,
                 backup_number - 1,
             )
-        destination_path = "%s.%d" % (RUNTIME_LOG_PATH, backup_number)
+        destination_path = "%s.%d" % (runtime_log_path, backup_number)
         if not os.path.isfile(source_path):
             continue
         if os.path.isfile(destination_path):
@@ -126,6 +190,8 @@ def _rotate_runtime_log_if_needed(incoming_byte_count):
 
 
 def _log(message, **fields):
+    log_date = time.strftime("%Y-%m-%d")
+    runtime_log_path = _dated_runtime_log_path(log_date)
     parts = [time.strftime("%Y-%m-%dT%H:%M:%S"), LOG_PREFIX, str(message)]
     for field_name in sorted(fields):
         parts.append("%s=%s" % (field_name, fields[field_name]))
@@ -137,14 +203,159 @@ def _log(message, **fields):
             os.makedirs(runtime_log_directory)
         with _runtime_log_lock:
             try:
-                _rotate_runtime_log_if_needed(len(encoded_log_line))
+                _remove_expired_runtime_logs(log_date)
+                _rotate_runtime_log_if_needed(
+                    runtime_log_path,
+                    len(encoded_log_line),
+                )
             except Exception:
                 pass
-            with open(RUNTIME_LOG_PATH, "ab") as runtime_log_file:
+            with open(runtime_log_path, "ab") as runtime_log_file:
                 runtime_log_file.write(encoded_log_line)
     except Exception:
         pass
     print(log_line)
+
+
+def _historical_order_archive_path(order_date):
+    return os.path.join(
+        HISTORICAL_ORDER_ARCHIVE_DIRECTORY,
+        "qmt-orders-%s.json" % order_date,
+    )
+
+
+def _order_date(order):
+    timestamp = str(order.get("time") or "").strip()
+    compact_date = timestamp[:8]
+    try:
+        time.strptime(compact_date, "%Y%m%d")
+    except (TypeError, ValueError):
+        return ""
+    return compact_date
+
+
+def _order_archive_key(order):
+    order_id = str(order.get("order_id") or "").strip()
+    if order_id:
+        return "order:%s" % order_id
+    return "submission:%s:%s:%s" % (
+        str(order.get("stock_code") or ""),
+        str(order.get("client_order_id") or ""),
+        str(order.get("time") or ""),
+    )
+
+
+def _read_historical_order_archive(order_date):
+    archive_path = _historical_order_archive_path(order_date)
+    if not os.path.isfile(archive_path):
+        return None
+    with open(archive_path, "rb") as archive_file:
+        archive_payload = json.loads(archive_file.read().decode("utf-8"))
+    if str(archive_payload.get("account_id") or "") == "":
+        raise ValueError("Historical order archive has no account ID.")
+    orders = archive_payload.get("orders")
+    if not isinstance(orders, list):
+        raise ValueError("Historical order archive has no orders list.")
+    return archive_payload
+
+
+def _write_historical_order_archive(account_id, order_date, orders):
+    if not os.path.isdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
+        os.makedirs(HISTORICAL_ORDER_ARCHIVE_DIRECTORY)
+    archive_path = _historical_order_archive_path(order_date)
+    temporary_archive_path = "%s.tmp" % archive_path
+    archive_payload = {
+        "account_id": str(account_id),
+        "archive_date": order_date,
+        "orders": sorted(
+            orders,
+            key=lambda order: (
+                str(order.get("time") or ""),
+                str(order.get("order_id") or ""),
+            ),
+        ),
+    }
+    encoded_payload = json.dumps(
+        archive_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    with open(temporary_archive_path, "wb") as archive_file:
+        archive_file.write(encoded_payload)
+    os.replace(temporary_archive_path, archive_path)
+
+
+def _archive_historical_orders(account_id, orders, empty_date=""):
+    orders_by_date = {}
+    for order in orders:
+        order_date = _order_date(order)
+        if order_date:
+            orders_by_date.setdefault(order_date, []).append(order)
+    if empty_date and empty_date not in orders_by_date:
+        orders_by_date[empty_date] = []
+
+    with _historical_order_archive_lock:
+        for order_date, dated_orders in orders_by_date.items():
+            existing_archive = _read_historical_order_archive(order_date)
+            if existing_archive is not None:
+                archived_account_id = str(existing_archive["account_id"])
+                if archived_account_id != str(account_id):
+                    raise ValueError(
+                        "Historical order archive account does not match Gateway account."
+                    )
+                merged_orders = {
+                    _order_archive_key(order): order
+                    for order in existing_archive["orders"]
+                }
+            else:
+                merged_orders = {}
+            for order in dated_orders:
+                order_key = _order_archive_key(order)
+                existing_order = merged_orders.get(order_key, {})
+                merged_order = dict(existing_order)
+                merged_order.update(order)
+                if not merged_order.get("strategy_name"):
+                    merged_order["strategy_name"] = existing_order.get(
+                        "strategy_name",
+                        "",
+                    )
+                merged_orders[order_key] = merged_order
+            _write_historical_order_archive(
+                account_id,
+                order_date,
+                list(merged_orders.values()),
+            )
+
+
+def _remove_expired_historical_order_archives(current_date):
+    if not os.path.isdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
+        return
+    oldest_retained_date = time.strftime(
+        "%Y%m%d",
+        time.localtime(
+            time.time()
+            - (HISTORICAL_ORDER_ARCHIVE_RETENTION_DAYS - 1) * 24 * 60 * 60
+        ),
+    )
+    for archive_filename in os.listdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
+        if not archive_filename.startswith("qmt-orders-") or not archive_filename.endswith(
+            ".json"
+        ):
+            continue
+        archive_date = archive_filename[len("qmt-orders-"):-len(".json")]
+        try:
+            time.strptime(archive_date, "%Y%m%d")
+        except ValueError:
+            continue
+        if archive_date >= oldest_retained_date:
+            continue
+        try:
+            os.remove(
+                os.path.join(HISTORICAL_ORDER_ARCHIVE_DIRECTORY, archive_filename)
+            )
+        except OSError:
+            pass
 
 
 _log(
@@ -298,27 +509,89 @@ def _order_type(value):
     return order_type_text
 
 
+def _native_stock_code(native_security_info):
+    raw_stock_code = str(
+        _attribute(
+            native_security_info,
+            ("m_strInstrumentID", "stock_code"),
+            "",
+        )
+        or ""
+    ).strip().upper()
+    if "." in raw_stock_code:
+        return raw_stock_code
+
+    raw_exchange_id = str(
+        _attribute(
+            native_security_info,
+            ("m_strExchangeID", "exchange_id"),
+            "",
+        )
+        or ""
+    ).strip().upper()
+    exchange_suffix = {
+        "SH": "SH",
+        "SSE": "SH",
+        "XSHG": "SH",
+        "SZ": "SZ",
+        "SZSE": "SZ",
+        "XSHE": "SZ",
+        "BJ": "BJ",
+        "BSE": "BJ",
+        "XBSE": "BJ",
+    }.get(raw_exchange_id, "")
+    if exchange_suffix and raw_stock_code:
+        return "%s.%s" % (raw_stock_code, exchange_suffix)
+    return raw_stock_code
+
+
 def _normalize_account(account_info):
-    return {
-        "available_cash": _number(
-            _attribute(account_info, ("m_dAvailable", "available_cash"), 0)
+    available_cash = _number(
+        _attribute(account_info, ("m_dAvailable", "available_cash"), 0)
+    )
+    _log(
+        "account_snapshot",
+        available_cash=available_cash,
+        status=str(_attribute(account_info, ("m_strStatus", "status"), "") or ""),
+        total_balance=_number(
+            _attribute(account_info, ("m_dBalance", "total_balance"), 0)
         ),
+    )
+    return {
+        "available_cash": available_cash,
     }
 
 
 def _normalize_position(position_info):
-    return {
-        "stock_code": str(
-            _attribute(
-                position_info,
-                ("m_strInstrumentID", "stock_code"),
-                "",
-            )
+    stock_code = _native_stock_code(position_info)
+    volume = _number(
+        _attribute(position_info, ("m_nVolume", "volume"), 0)
+    )
+    available_volume = _number(
+        _attribute(
+            position_info,
+            ("m_nCanUseVolume", "available_volume"),
+            0,
+        )
+    )
+    _log(
+        "position_snapshot",
+        available_volume=available_volume,
+        raw_exchange_id=str(
+            _attribute(position_info, ("m_strExchangeID", "exchange_id"), "")
             or ""
         ),
-        "volume": _number(
-            _attribute(position_info, ("m_nVolume", "volume"), 0)
+        raw_stock_code=str(
+            _attribute(position_info, ("m_strInstrumentID", "stock_code"), "")
+            or ""
         ),
+        stock_code=stock_code,
+        volume=volume,
+    )
+    return {
+        "stock_code": stock_code,
+        "volume": volume,
+        "available_volume": available_volume,
         "open_price": _number(
             _attribute(position_info, ("m_dOpenPrice", "open_price"), 0)
         ),
@@ -347,14 +620,7 @@ def _normalize_order(order_info):
         _attribute(order_info, ("m_strRemark", "remark"), "") or ""
     )
     return {
-        "stock_code": str(
-            _attribute(
-                order_info,
-                ("m_strInstrumentID", "stock_code"),
-                "",
-            )
-            or ""
-        ),
+        "stock_code": _native_stock_code(order_info),
         "order_id": str(
             _attribute(
                 order_info,
@@ -423,6 +689,14 @@ def _normalize_order(order_info):
             or ""
         ),
         "remark": remark,
+        "strategy_name": str(
+            _attribute(
+                order_info,
+                ("m_strStrategyName", "strategy_name"),
+                "",
+            )
+            or ""
+        ),
         "time": timestamp,
     }
 
@@ -436,14 +710,7 @@ def _normalize_deal(deal_info):
     )
     timestamp = (trade_date + " " + trade_time).strip()
     return {
-        "stock_code": str(
-            _attribute(
-                deal_info,
-                ("m_strInstrumentID", "stock_code"),
-                "",
-            )
-            or ""
-        ),
+        "stock_code": _native_stock_code(deal_info),
         "order_id": str(
             _attribute(
                 deal_info,
@@ -698,8 +965,16 @@ class LeanQmtGateway(object):
         self._client_lock = threading.Lock()
         self._subscriptions_by_protocol_id = {}
         self._protocol_ids_by_stock_code = {}
+        self._quote_callbacks_by_protocol_id = {}
+        self._last_polled_quote_signature_by_stock_code = {}
+        self._next_quote_poll_at = 0.0
+        self._quote_poll_has_succeeded = False
+        self._quote_poll_empty_shape_logged = False
+        self._quote_poll_unrecognized_record_logged = False
         self._cached_responses = {}
         self._cached_response_ids = []
+        self._order_submissions_by_client_order_id = {}
+        self._order_submission_client_order_ids = []
 
     @property
     def is_running(self):
@@ -859,6 +1134,122 @@ class LeanQmtGateway(object):
 
         if processed_request_count:
             _log("requests_processed", count=processed_request_count)
+        self._poll_quote_snapshots_if_due()
+
+    def _poll_quote_snapshots_if_due(self):
+        stock_codes = sorted(self._protocol_ids_by_stock_code.keys())
+        if not stock_codes or not callable(self.get_market_data_function):
+            return
+        current_time = time.monotonic()
+        if current_time < self._next_quote_poll_at:
+            return
+        self._next_quote_poll_at = current_time + QUOTE_POLL_INTERVAL_SECONDS
+
+        try:
+            field_names = ["open", "high", "low", "close", "volume"]
+            market_data = self.get_market_data_function(
+                fields=field_names,
+                stock_code=stock_codes,
+                period="1d",
+                start_time="",
+                end_time="",
+                count=1,
+                dividend_type="none",
+                fill_data=True,
+                subscribe=False,
+            )
+            published_count = 0
+            stock_codes_with_records = 0
+            stock_codes_with_normalized_bars = 0
+            for stock_code in stock_codes:
+                records = _history_records(stock_code, market_data, field_names)
+                if not records:
+                    continue
+                stock_codes_with_records += 1
+                bar = _normalize_history_bar(records[-1])
+                if bar is None:
+                    if not self._quote_poll_unrecognized_record_logged:
+                        self._quote_poll_unrecognized_record_logged = True
+                        record_field_shapes = {}
+                        last_record = records[-1]
+                        if isinstance(last_record, dict):
+                            for field_name, field_value in last_record.items():
+                                try:
+                                    field_length = len(field_value)
+                                except Exception:
+                                    field_length = "scalar"
+                                record_field_shapes[field_name] = "%s:%s" % (
+                                    type(field_value).__name__,
+                                    field_length,
+                                )
+                        _log(
+                            "quote_poll_unrecognized_record",
+                            field_shapes=record_field_shapes,
+                            stock_code=stock_code,
+                        )
+                    continue
+                stock_codes_with_normalized_bars += 1
+                signature = (bar["time"], bar["close"], bar["volume"])
+                if (
+                    self._last_polled_quote_signature_by_stock_code.get(
+                        stock_code
+                    )
+                    == signature
+                ):
+                    continue
+                self._last_polled_quote_signature_by_stock_code[stock_code] = (
+                    signature
+                )
+                self._publish_event(
+                    "quote",
+                    {
+                        "stock_code": stock_code,
+                        "time": time.strftime("%Y%m%d%H%M%S"),
+                        "last_price": bar["close"],
+                        "volume": bar["volume"],
+                        "amount": 0,
+                        "bid_price": bar["close"],
+                        "ask_price": bar["close"],
+                        "bid_volume": 0,
+                        "ask_volume": 0,
+                    },
+                )
+                published_count += 1
+            _log(
+                "quote_poll_complete",
+                normalized=stock_codes_with_normalized_bars,
+                published=published_count,
+                records=stock_codes_with_records,
+                subscriptions=len(stock_codes),
+            )
+            if (
+                stock_codes_with_records == 0
+                and not self._quote_poll_empty_shape_logged
+            ):
+                self._quote_poll_empty_shape_logged = True
+                top_level_keys = []
+                first_value_type = "none"
+                if isinstance(market_data, dict):
+                    top_level_keys = list(market_data.keys())[:5]
+                    if top_level_keys:
+                        first_value_type = type(
+                            market_data[top_level_keys[0]]
+                        ).__name__
+                _log(
+                    "quote_poll_empty_shape",
+                    first_value_type=first_value_type,
+                    market_data_type=type(market_data).__name__,
+                    top_level_keys=top_level_keys,
+                )
+            if published_count and not self._quote_poll_has_succeeded:
+                self._quote_poll_has_succeeded = True
+                _log(
+                    "quote_poll_started",
+                    published=published_count,
+                    subscriptions=len(stock_codes),
+                )
+        except Exception as error:
+            _log("quote_poll_failed", error=repr(error))
 
     def account_callback(self, account_info):
         payload = _normalize_account(account_info)
@@ -870,8 +1261,26 @@ class LeanQmtGateway(object):
         self._publish_event("account", payload)
         _log("account_event", status=status)
 
+    def _enrich_order_with_submission(self, payload):
+        client_order_id = str(payload.get("client_order_id") or "").strip()
+        submission = self._order_submissions_by_client_order_id.get(
+            client_order_id
+        )
+        if submission is None:
+            return payload
+        if submission["stock_code"] != payload.get("stock_code"):
+            return payload
+        if not payload.get("strategy_name"):
+            payload["strategy_name"] = submission["strategy_name"]
+        if not payload.get("time"):
+            payload["time"] = submission["time"]
+        return payload
+
     def order_callback(self, order_info):
-        payload = _normalize_order(order_info)
+        payload = self._enrich_order_with_submission(
+            _normalize_order(order_info)
+        )
+        _archive_historical_orders(self.account_id, [payload])
         self._publish_event("order", payload)
         _log(
             "order_event",
@@ -900,10 +1309,13 @@ class LeanQmtGateway(object):
         )
 
     def order_error_callback(self, order_args, error_message):
-        payload = _normalize_order(order_args)
+        payload = self._enrich_order_with_submission(
+            _normalize_order(order_args)
+        )
         callback_error_message = str(error_message or "").strip()
         if callback_error_message:
             payload["callback_error_message"] = callback_error_message
+        _archive_historical_orders(self.account_id, [payload])
         self._publish_event("order", payload)
         _log(
             "order_error_event",
@@ -1194,12 +1606,20 @@ class LeanQmtGateway(object):
                 ]
             }
         if operation == "query_orders":
-            return {
-                "orders": [
-                    _normalize_order(order_info)
-                    for order_info in self._query_trade_detail("ORDER")
-                ]
-            }
+            orders = [
+                self._enrich_order_with_submission(_normalize_order(order_info))
+                for order_info in self._query_trade_detail("ORDER")
+            ]
+            current_date = time.strftime("%Y%m%d")
+            _archive_historical_orders(
+                self.account_id,
+                orders,
+                empty_date=current_date,
+            )
+            _remove_expired_historical_order_archives(current_date)
+            return {"orders": orders}
+        if operation == "query_historical_orders":
+            return self._query_historical_orders(payload)
         if operation == "query_history":
             return self._query_history(payload)
         if operation == "place_order":
@@ -1214,6 +1634,140 @@ class LeanQmtGateway(object):
             "UNSUPPORTED_OPERATION",
             "Unsupported operation: %s" % operation,
         )
+
+    def _query_historical_orders(self, payload):
+        requested_account_id = str(payload.get("account_id") or "").strip()
+        if requested_account_id and requested_account_id != self.account_id:
+            raise _RequestError(
+                "ACCOUNT_MISMATCH",
+                "Gateway account does not match the requested account.",
+            )
+        start_date = str(payload.get("start_date") or "").strip()
+        end_date = str(payload.get("end_date") or "").strip()
+        for field_name, field_value in (
+            ("start_date", start_date),
+            ("end_date", end_date),
+        ):
+            try:
+                time.strptime(field_value, "%Y%m%d")
+            except (TypeError, ValueError):
+                raise _RequestError(
+                    "INVALID_REQUEST",
+                    "%s must use YYYYMMDD format." % field_name,
+                )
+        if start_date > end_date:
+            raise _RequestError(
+                "INVALID_REQUEST",
+                "start_date must be on or before end_date.",
+            )
+
+        history_query_function = getattr(
+            self.context_info,
+            "get_tradedatafromerds",
+            None,
+        )
+        started_at = time.time()
+        history_result = None
+        native_api_error = None
+        if callable(history_query_function):
+            try:
+                history_result = history_query_function(
+                    ACCOUNT_TYPE,
+                    self.account_id,
+                    start_date,
+                    end_date,
+                )
+            except AttributeError as error:
+                native_api_error = error
+        if native_api_error is not None:
+            underlying_context = getattr(self.context_info, "context", None)
+            _log(
+                "historical_orders_api_incompatible",
+                context_methods=[
+                    method_name
+                    for method_name in dir(self.context_info)
+                    if "order" in method_name.lower()
+                    or "trade" in method_name.lower()
+                    or "history" in method_name.lower()
+                ],
+                error=repr(native_api_error),
+                underlying_context_methods=[
+                    method_name
+                    for method_name in dir(underlying_context)
+                    if "order" in method_name.lower()
+                    or "trade" in method_name.lower()
+                    or "history" in method_name.lower()
+                ] if underlying_context is not None else [],
+            )
+        if history_result is not None:
+            history_rows = _rows(history_result)
+            _log(
+                "historical_orders_raw_sample",
+                end_date=end_date,
+                rows=len(history_rows),
+                sample=repr(history_rows[0])[:500] if history_rows else "",
+                start_date=start_date,
+            )
+            orders = [
+                self._enrich_order_with_submission(_normalize_order(history_row))
+                for history_row in history_rows
+            ]
+            _archive_historical_orders(self.account_id, orders)
+            source = "native"
+        else:
+            current_date = time.strftime("%Y%m%d")
+            if start_date <= current_date <= end_date:
+                current_orders = [
+                    self._enrich_order_with_submission(
+                        _normalize_order(order_info)
+                    )
+                    for order_info in self._query_trade_detail("ORDER")
+                ]
+                _archive_historical_orders(
+                    self.account_id,
+                    current_orders,
+                    empty_date=current_date,
+                )
+            orders = []
+            missing_dates = []
+            next_date_seconds = time.mktime(time.strptime(start_date, "%Y%m%d"))
+            end_date_seconds = time.mktime(time.strptime(end_date, "%Y%m%d"))
+            while next_date_seconds <= end_date_seconds:
+                archive_date = time.strftime(
+                    "%Y%m%d",
+                    time.localtime(next_date_seconds),
+                )
+                day_of_week = time.localtime(next_date_seconds).tm_wday
+                if day_of_week < 5:
+                    archive_payload = _read_historical_order_archive(archive_date)
+                    if archive_payload is None:
+                        missing_dates.append(archive_date)
+                    elif str(archive_payload["account_id"]) != self.account_id:
+                        raise _RequestError(
+                            "ACCOUNT_MISMATCH",
+                            "Historical order archive account does not match Gateway account.",
+                        )
+                    else:
+                        orders.extend(archive_payload["orders"])
+                next_date_seconds += 24 * 60 * 60
+            if missing_dates:
+                raise _RequestError(
+                    "HISTORICAL_ARCHIVE_INCOMPLETE",
+                    "Historical order archive is missing dates: %s."
+                    % ",".join(missing_dates),
+                )
+            source = "daily_archive"
+        orders.sort(key=lambda order: (order["time"], order["order_id"]))
+        _remove_expired_historical_order_archives(time.strftime("%Y%m%d"))
+        _log(
+            "historical_orders_query_ok",
+            elapsed_ms=int((time.time() - started_at) * 1000),
+            end_date=end_date,
+            orders=len(orders),
+            source=source,
+            start_date=start_date,
+        )
+        return {"orders": orders}
 
     def _query_history(self, payload):
         stock_code = str(payload.get("stock_code") or "").strip().upper()
@@ -1415,6 +1969,37 @@ class LeanQmtGateway(object):
         strategy_name = str(
             payload.get("strategy_name") or self.strategy_name
         ).strip()
+        context_is_last_bar = None
+        is_last_bar_function = getattr(self.context_info, "is_last_bar", None)
+        if callable(is_last_bar_function):
+            try:
+                context_is_last_bar = bool(is_last_bar_function())
+            except Exception as error:
+                _log("place_order_context_check_failed", error=repr(error))
+        _log(
+            "place_order_dispatch",
+            client_order_id=client_order_id,
+            context_is_last_bar=repr(context_is_last_bar),
+            quick_trade=2,
+            strategy_name=strategy_name,
+        )
+        self._order_submissions_by_client_order_id[client_order_id] = {
+            "stock_code": stock_code,
+            "strategy_name": strategy_name,
+            "time": time.strftime("%Y%m%d %H%M%S"),
+        }
+        if client_order_id in self._order_submission_client_order_ids:
+            self._order_submission_client_order_ids.remove(client_order_id)
+        self._order_submission_client_order_ids.append(client_order_id)
+        while (
+            len(self._order_submission_client_order_ids)
+            > MAXIMUM_CACHED_RESPONSES
+        ):
+            expired_client_order_id = self._order_submission_client_order_ids.pop(0)
+            self._order_submissions_by_client_order_id.pop(
+                expired_client_order_id,
+                None,
+            )
         passorder_result = self.passorder_function(
             operation_type,
             1101,
@@ -1424,7 +2009,7 @@ class LeanQmtGateway(object):
             model_price,
             int(quantity),
             strategy_name,
-            1,
+            2,
             client_order_id,
             self.context_info,
         )
@@ -1438,6 +2023,7 @@ class LeanQmtGateway(object):
             price=model_price,
             price_type=price_type,
             quantity=int(quantity),
+            strategy_name=strategy_name,
             stock_code=stock_code,
         )
         return {
@@ -1476,6 +2062,13 @@ class LeanQmtGateway(object):
 
         existing_protocol_id = self._protocol_ids_by_stock_code.get(stock_code)
         if existing_protocol_id is not None:
+            self._last_polled_quote_signature_by_stock_code.pop(stock_code, None)
+            self._next_quote_poll_at = time.monotonic() + 1.0
+            _log(
+                "subscription_reused",
+                stock_code=stock_code,
+                subscription_id=existing_protocol_id,
+            )
             return {
                 "subscribed": True,
                 "subscription_id": existing_protocol_id,
@@ -1502,6 +2095,10 @@ class LeanQmtGateway(object):
             stock_code,
         )
         self._protocol_ids_by_stock_code[stock_code] = protocol_subscription_id
+        self._quote_callbacks_by_protocol_id[protocol_subscription_id] = (
+            quote_callback
+        )
+        self._next_quote_poll_at = time.monotonic() + 1.0
         _log(
             "subscribed",
             stock_code=stock_code,
@@ -1548,6 +2145,14 @@ class LeanQmtGateway(object):
         if unsubscribed:
             del self._subscriptions_by_protocol_id[protocol_subscription_id]
             self._protocol_ids_by_stock_code.pop(stock_code, None)
+            self._last_polled_quote_signature_by_stock_code.pop(
+                stock_code,
+                None,
+            )
+            self._quote_callbacks_by_protocol_id.pop(
+                protocol_subscription_id,
+                None,
+            )
         _log(
             "unsubscribed",
             stock_code=stock_code,

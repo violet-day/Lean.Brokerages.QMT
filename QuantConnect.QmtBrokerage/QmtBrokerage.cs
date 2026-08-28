@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
@@ -23,13 +24,28 @@ namespace QuantConnect.Brokerages.Qmt
     [BrokerageFactory(typeof(QmtBrokerageFactory))]
     public sealed class QmtBrokerage : Brokerage, IDataQueueHandler
     {
+        private static readonly TimeSpan[] DefaultReconnectDelays =
+        {
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(20),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(60)
+        };
+
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
         private readonly ITimeProvider _timeProvider;
+        private readonly TimeSpan? _reconnectIntervalOverride;
+        private readonly object _reconnectLock = new object();
         private QmtAccountProperties? _accountProperties;
-        private readonly ConcurrentDictionary<Symbol, SubscriptionState> _subscriptions =
-            new ConcurrentDictionary<Symbol, SubscriptionState>();
+        private CancellationTokenSource? _reconnectCancellationTokenSource;
+        private Task? _reconnectTask;
+        private readonly ConcurrentDictionary<string, SubscriptionState> _subscriptions =
+            new ConcurrentDictionary<string, SubscriptionState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
             new Dictionary<Symbol, CumulativeVolumeState>();
         private readonly object _cumulativeVolumeLock = new object();
@@ -44,9 +60,13 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>> _pendingDealsByNativeOrderId =
             new ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>>(StringComparer.Ordinal);
         private readonly object _pendingDealsLock = new object();
+        private int _automaticReconnectEnabled = 1;
+        private int _isRecoveringConnection;
+        private long _connectionLostAtUtcTicks;
         private int _isDisposed;
 
-        public override bool IsConnected => _gatewayClient.IsConnected;
+        public override bool IsConnected =>
+            _gatewayClient.IsConnected && Volatile.Read(ref _isRecoveringConnection) == 0;
 
         public QmtAccountProperties AccountProperties => _accountProperties ??
             throw new QmtGatewayException("QMT account properties are unavailable before the Gateway handshake.");
@@ -55,19 +75,28 @@ namespace QuantConnect.Brokerages.Qmt
             IQmtGatewayClient gatewayClient,
             IOrderProvider orderProvider,
             QmtSymbolMapper? symbolMapper = null,
-            ITimeProvider? timeProvider = null)
+            ITimeProvider? timeProvider = null,
+            TimeSpan? reconnectInterval = null)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
             _orderProvider = orderProvider ?? throw new ArgumentNullException(nameof(orderProvider));
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
             _timeProvider = timeProvider ?? RealTimeProvider.Instance;
+            _reconnectIntervalOverride = reconnectInterval;
+            if (_reconnectIntervalOverride.HasValue &&
+                _reconnectIntervalOverride.Value <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(reconnectInterval),
+                    "The QMT reconnect interval must be positive.");
+            }
             if (_gatewayClient.ServerInformation != null)
             {
                 _accountProperties = new QmtAccountProperties(
                     _gatewayClient.ServerInformation.IsSimulation);
             }
-            AccountBaseCurrency = "CNY";
+            AccountBaseCurrency = QmtMarket.AccountCurrency;
             _gatewayClient.EventReceived += HandleGatewayEvent;
             _gatewayClient.Disconnected += HandleGatewayDisconnected;
         }
@@ -75,11 +104,15 @@ namespace QuantConnect.Brokerages.Qmt
         public override void Connect()
         {
             ThrowIfDisposed();
+            Interlocked.Exchange(ref _automaticReconnectEnabled, 1);
+            CancelReconnectLoop();
             Log.Trace("QmtBrokerage.Connect(): stage=connect status=start");
             _gatewayClient.Connect();
             var serverInformation = _gatewayClient.ServerInformation ??
                 throw new QmtGatewayProtocolException("QMT Gateway connected without hello server information.");
             _accountProperties = new QmtAccountProperties(serverInformation.IsSimulation);
+            Interlocked.Exchange(ref _isRecoveringConnection, 0);
+            Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
             Log.Trace(
                 $"QmtBrokerage.Connect(): stage=connect status=ok account_id={serverInformation.AccountId} " +
                 $"server={serverInformation.ServerName} is_simulation={serverInformation.IsSimulation.ToString().ToLowerInvariant()} " +
@@ -88,6 +121,10 @@ namespace QuantConnect.Brokerages.Qmt
 
         public override void Disconnect()
         {
+            Interlocked.Exchange(ref _automaticReconnectEnabled, 0);
+            CancelReconnectLoop();
+            Interlocked.Exchange(ref _isRecoveringConnection, 0);
+            Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
             _gatewayClient.Disconnect();
             Log.Trace("QmtBrokerage.Disconnect(): status=ok");
         }
@@ -202,11 +239,13 @@ namespace QuantConnect.Brokerages.Qmt
                 (order.Type != OrderType.Market && order.Type != OrderType.Limit) ||
                 order.Quantity == 0 || order.Quantity != decimal.Truncate(order.Quantity))
             {
+                const string errorMessage =
+                    "QMT MVP accepts only whole-share A-share Market and Limit orders.";
                 OnMessage(new BrokerageMessageEvent(
                     BrokerageMessageType.Warning,
                     "UnsupportedOrder",
-                    "QMT MVP accepts only whole-share A-share Market and Limit orders."));
-                return false;
+                    errorMessage));
+                throw new QmtOrderSubmissionException("UnsupportedOrder", errorMessage);
             }
 
             try
@@ -219,14 +258,18 @@ namespace QuantConnect.Brokerages.Qmt
                     if (order.Properties is not QmtOrderProperties qmtOrderProperties ||
                         !qmtOrderProperties.MarketOrderStyle.HasValue)
                     {
+                        const string errorMessage =
+                            "QMT market orders require QmtOrderProperties.MarketOrderStyle.";
                         Log.Trace(
                             $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
                             $"symbol={brokerageSymbol} reason=missing-market-order-style");
                         OnMessage(new BrokerageMessageEvent(
                             BrokerageMessageType.Warning,
                             "MissingMarketOrderStyle",
-                            "QMT market orders require QmtOrderProperties.MarketOrderStyle."));
-                        return false;
+                            errorMessage));
+                        throw new QmtOrderSubmissionException(
+                            "MissingMarketOrderStyle",
+                            errorMessage);
                     }
 
                     try
@@ -245,19 +288,25 @@ namespace QuantConnect.Brokerages.Qmt
                             BrokerageMessageType.Warning,
                             "UnsupportedMarketOrderStyle",
                             exception.Message));
-                        return false;
+                        throw new QmtOrderSubmissionException(
+                            "UnsupportedMarketOrderStyle",
+                            exception.Message);
                     }
                 }
                 else if (order.Properties is QmtOrderProperties { MarketOrderStyle: not null })
                 {
+                    const string errorMessage =
+                        "QmtOrderProperties.MarketOrderStyle can be used only with a market order.";
                     Log.Trace(
                         $"QmtBrokerage.PlaceOrder(): status=unsupported lean_order_id={order.Id} " +
                         $"symbol={brokerageSymbol} reason=market-order-style-on-limit-order");
                     OnMessage(new BrokerageMessageEvent(
                         BrokerageMessageType.Warning,
                         "UnexpectedMarketOrderStyle",
-                        "QmtOrderProperties.MarketOrderStyle can be used only with a market order."));
-                    return false;
+                        errorMessage));
+                    throw new QmtOrderSubmissionException(
+                        "UnexpectedMarketOrderStyle",
+                        errorMessage);
                 }
 
                 var utcTime = _timeProvider.GetUtcNow();
@@ -287,11 +336,14 @@ namespace QuantConnect.Brokerages.Qmt
                 var result = response.ToPayload<QmtPlaceOrderPayload>();
                 if (!result.Accepted)
                 {
+                    var errorMessage =
+                        $"QMT Gateway did not accept LEAN order {order.Id}; " +
+                        $"passorder_result={result.PassOrderResult}.";
                     OnMessage(new BrokerageMessageEvent(
                         BrokerageMessageType.Warning,
                         "OrderRejected",
-                        $"QMT Gateway did not accept LEAN order {order.Id}."));
-                    return false;
+                        errorMessage));
+                    throw new QmtOrderSubmissionException("OrderRejected", errorMessage);
                 }
 
                 _leanOrderIdsByClientOrderId[clientOrderId] = order.Id;
@@ -319,7 +371,7 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 Log.Error(exception, $"QmtBrokerage.PlaceOrder(): status=error lean_order_id={order.Id}");
                 OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Error, "PlaceOrderFailed", exception.Message));
-                return false;
+                throw new QmtOrderSubmissionException("PlaceOrderFailed", exception.Message);
             }
         }
 
@@ -337,6 +389,18 @@ namespace QuantConnect.Brokerages.Qmt
             if (order == null)
             {
                 throw new ArgumentNullException(nameof(order));
+            }
+
+            if (!order.Status.IsOpen())
+            {
+                Log.Trace(
+                    $"QmtBrokerage.CancelOrder(): status=rejected reason=order-not-open " +
+                    $"lean_order_id={order.Id} order_status={order.Status}");
+                OnMessage(new BrokerageMessageEvent(
+                    BrokerageMessageType.Warning,
+                    "CancelNotAllowed",
+                    $"LEAN order {order.Id} cannot be canceled from status {order.Status}."));
+                return false;
             }
 
             var nativeOrderId = order.BrokerId.FirstOrDefault();
@@ -389,22 +453,23 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             EnsureConnected();
+            var brokerageStockCode = _symbolMapper.GetBrokerageSymbol(dataConfig.Symbol);
             var subscriptionState = _subscriptions.GetOrAdd(
-                dataConfig.Symbol,
-                symbol =>
+                brokerageStockCode,
+                stockCode =>
                 {
                     var response = SendRequest(
                         QmtProtocol.Operations.Subscribe,
-                        new QmtStockCodeRequest { StockCode = _symbolMapper.GetBrokerageSymbol(symbol) });
+                        new QmtStockCodeRequest { StockCode = stockCode });
                     var result = response.ToPayload<QmtSubscribePayload>();
                     if (!result.Subscribed || string.IsNullOrWhiteSpace(result.SubscriptionId))
                     {
-                        throw new QmtGatewayProtocolException($"QMT Gateway did not subscribe {symbol.Value}.");
+                        throw new QmtGatewayProtocolException($"QMT Gateway did not subscribe {stockCode}.");
                     }
                     Log.Trace(
-                        $"QmtBrokerage.Subscribe(): status=ok symbol={symbol.Value} " +
+                        $"QmtBrokerage.Subscribe(): status=ok symbol={dataConfig.Symbol.Value} stock_code={stockCode} " +
                         $"subscription_id={result.SubscriptionId}");
-                    return new SubscriptionState(result.SubscriptionId);
+                    return new SubscriptionState(result.SubscriptionId, dataConfig.Symbol);
                 });
             Interlocked.Increment(ref subscriptionState.ReferenceCount);
             return subscriptionState.CreateEnumerator(dataConfig.TickType, newDataAvailableHandler);
@@ -412,7 +477,13 @@ namespace QuantConnect.Brokerages.Qmt
 
         public void Unsubscribe(SubscriptionDataConfig dataConfig)
         {
-            if (dataConfig == null || !_subscriptions.TryGetValue(dataConfig.Symbol, out var subscriptionState))
+            if (dataConfig == null)
+            {
+                return;
+            }
+
+            var brokerageStockCode = _symbolMapper.GetBrokerageSymbol(dataConfig.Symbol);
+            if (!_subscriptions.TryGetValue(brokerageStockCode, out var subscriptionState))
             {
                 return;
             }
@@ -422,16 +493,17 @@ namespace QuantConnect.Brokerages.Qmt
                 return;
             }
 
-            if (_subscriptions.TryRemove(dataConfig.Symbol, out var removedState))
+            if (_subscriptions.TryRemove(brokerageStockCode, out var removedState))
             {
+                var subscriptionId = removedState.Deactivate();
                 try
                 {
                     SendRequest(
                         QmtProtocol.Operations.Unsubscribe,
-                        new QmtUnsubscribeRequest { SubscriptionId = removedState.SubscriptionId });
+                        new QmtUnsubscribeRequest { SubscriptionId = subscriptionId });
                     Log.Trace(
                         $"QmtBrokerage.Unsubscribe(): status=ok symbol={dataConfig.Symbol.Value} " +
-                        $"subscription_id={removedState.SubscriptionId}");
+                        $"subscription_id={subscriptionId}");
                 }
                 finally
                 {
@@ -451,6 +523,8 @@ namespace QuantConnect.Brokerages.Qmt
                 return;
             }
 
+            Interlocked.Exchange(ref _automaticReconnectEnabled, 0);
+            CancelReconnectLoop();
             _gatewayClient.EventReceived -= HandleGatewayEvent;
             _gatewayClient.Disconnected -= HandleGatewayDisconnected;
             foreach (var subscriptionState in _subscriptions.Values)
@@ -462,9 +536,12 @@ namespace QuantConnect.Brokerages.Qmt
             base.Dispose();
         }
 
-        private QmtProtocolMessage SendRequest(string operation, object? payload = null)
+        private QmtProtocolMessage SendRequest(
+            string operation,
+            object? payload = null,
+            CancellationToken cancellationToken = default)
         {
-            return _gatewayClient.SendRequestAsync(operation, payload).GetAwaiter().GetResult();
+            return _gatewayClient.SendRequestAsync(operation, payload, cancellationToken).GetAwaiter().GetResult();
         }
 
         private Order? CreateLeanOrder(QmtOrderSnapshot snapshot)
@@ -523,15 +600,15 @@ namespace QuantConnect.Brokerages.Qmt
 
         private void HandleQuote(QmtQuoteEventPayload quote)
         {
-            var symbol = _symbolMapper.GetLeanSymbol(
-                quote.StockCode,
-                SecurityType.Equity,
-                QmtSymbolMapper.MarketName);
-            if (!_subscriptions.TryGetValue(symbol, out var subscriptionState))
+            var brokerageStockCode = QmtSecurityCode.Parse(quote.StockCode).ToString();
+            if (!_subscriptions.TryGetValue(brokerageStockCode, out var subscriptionState))
             {
+                Log.Trace(
+                    $"QmtBrokerage.HandleQuote(): status=unmatched stock_code={brokerageStockCode}");
                 return;
             }
 
+            var symbol = subscriptionState.Symbol;
             var localTime = ParseQmtTime(quote.Time);
             var tradeQuantity = GetIncrementalTradeQuantity(symbol, localTime, quote.Volume);
             var tradeTick = new Tick(
@@ -863,8 +940,314 @@ namespace QuantConnect.Brokerages.Qmt
         private void HandleGatewayDisconnected(object? sender, QmtGatewayDisconnectedEventArgs eventArgs)
         {
             var reason = eventArgs.Exception?.Message ?? "The QMT Gateway connection closed.";
-            Log.Trace($"QmtBrokerage.HandleGatewayDisconnected(): status=disconnected reason={reason}");
-            OnMessage(BrokerageMessageEvent.Disconnected(reason));
+            lock (_reconnectLock)
+            {
+                if (Volatile.Read(ref _isDisposed) == 1 ||
+                    Volatile.Read(ref _automaticReconnectEnabled) == 0)
+                {
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref _isRecoveringConnection, 1, 0) != 0)
+                {
+                    Log.Trace(
+                        $"QmtBrokerage.HandleGatewayDisconnected(): status=duplicate reason={reason}");
+                    StartReconnectLoop();
+                    return;
+                }
+
+                Interlocked.Exchange(ref _connectionLostAtUtcTicks, _timeProvider.GetUtcNow().Ticks);
+                Log.Trace(
+                    $"QmtBrokerage.HandleGatewayDisconnected(): status=disconnected reason={reason}");
+                OnMessage(BrokerageMessageEvent.Disconnected(reason));
+            }
+
+            StartReconnectLoop();
+        }
+
+        private void StartReconnectLoop()
+        {
+            lock (_reconnectLock)
+            {
+                if ((_reconnectTask != null && !_reconnectTask.IsCompleted) ||
+                    Volatile.Read(ref _isDisposed) == 1 ||
+                    Volatile.Read(ref _automaticReconnectEnabled) == 0)
+                {
+                    return;
+                }
+
+                var reconnectCancellationTokenSource = new CancellationTokenSource();
+                _reconnectCancellationTokenSource = reconnectCancellationTokenSource;
+                _reconnectTask = Task.Run(() => ReconnectLoopAsync(reconnectCancellationTokenSource));
+                Log.Trace(
+                    $"QmtBrokerage.StartReconnectLoop(): status=start " +
+                    $"backoff_seconds={string.Join(",", DefaultReconnectDelays.Select(delay =>
+                        delay.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)))} " +
+                    $"override_seconds={(_reconnectIntervalOverride.HasValue
+                        ? _reconnectIntervalOverride.Value.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)
+                        : "none")}");
+            }
+        }
+
+        private async Task ReconnectLoopAsync(CancellationTokenSource reconnectCancellationTokenSource)
+        {
+            var cancellationToken = reconnectCancellationTokenSource.Token;
+            var attemptNumber = 0;
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested &&
+                    Volatile.Read(ref _automaticReconnectEnabled) == 1 &&
+                    Volatile.Read(ref _isDisposed) == 0)
+                {
+                    var nextAttemptNumber = attemptNumber + 1;
+                    var reconnectDelay = GetReconnectDelay(nextAttemptNumber);
+                    var nextAttemptAtUtc = _timeProvider.GetUtcNow().Add(reconnectDelay);
+                    Log.Trace(
+                        $"QmtBrokerage.ReconnectLoopAsync(): status=scheduled attempt={nextAttemptNumber} " +
+                        $"delay_seconds={reconnectDelay.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                        $"next_attempt_utc={nextAttemptAtUtc.ToString("O", CultureInfo.InvariantCulture)} " +
+                        $"outage_seconds={GetConnectionOutage().TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}");
+                    await Task.Delay(reconnectDelay, cancellationToken).ConfigureAwait(false);
+                    attemptNumber = nextAttemptNumber;
+                    var recoveryStage = "connect";
+                    try
+                    {
+                        Log.Trace(
+                            $"QmtBrokerage.ReconnectLoopAsync(): status=attempt attempt={attemptNumber} " +
+                            $"delay_seconds={reconnectDelay.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                            $"outage_seconds={GetConnectionOutage().TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}");
+                        await _gatewayClient.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var restoredSubscriptionCount = RecoverConnection(
+                            cancellationToken,
+                            ref recoveryStage);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        lock (_reconnectLock)
+                        {
+                            if (!_gatewayClient.IsConnected)
+                            {
+                                throw new QmtGatewayException(
+                                    "The QMT Gateway disconnected during connection recovery.");
+                            }
+                            if (Volatile.Read(ref _automaticReconnectEnabled) == 0 ||
+                                Volatile.Read(ref _isDisposed) == 1)
+                            {
+                                return;
+                            }
+
+                            var connectionOutage = GetConnectionOutage();
+                            var reconnectMessage =
+                                $"QMT Gateway reconnected after {attemptNumber} attempt(s) over " +
+                                $"{connectionOutage.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} second(s); " +
+                                $"restored {restoredSubscriptionCount} subscription(s).";
+                            Interlocked.Exchange(ref _isRecoveringConnection, 0);
+                            Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
+                            Log.Trace(
+                                $"QmtBrokerage.ReconnectLoopAsync(): status=ok attempt={attemptNumber} " +
+                                $"outage_seconds={connectionOutage.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                                $"restored_subscriptions={restoredSubscriptionCount}");
+                            OnMessage(BrokerageMessageEvent.Reconnected(reconnectMessage));
+                        }
+                        return;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception exception)
+                    {
+                        if (Volatile.Read(ref _isDisposed) == 1 ||
+                            Volatile.Read(ref _automaticReconnectEnabled) == 0)
+                        {
+                            return;
+                        }
+
+                        _gatewayClient.Disconnect();
+                        var nextReconnectDelay = GetReconnectDelay(attemptNumber + 1);
+                        var failedAttemptNextAttemptAtUtc = _timeProvider.GetUtcNow().Add(nextReconnectDelay);
+                        Log.Error(
+                            exception,
+                            $"QmtBrokerage.ReconnectLoopAsync(): status=failed attempt={attemptNumber} " +
+                            $"failure_stage={recoveryStage} " +
+                            $"error_type={exception.GetType().Name} " +
+                            $"outage_seconds={GetConnectionOutage().TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                            $"next_delay_seconds={nextReconnectDelay.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                            $"next_attempt_utc={failedAttemptNextAttemptAtUtc.ToString("O", CultureInfo.InvariantCulture)}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                var shouldRestartReconnectLoop = false;
+                lock (_reconnectLock)
+                {
+                    if (ReferenceEquals(_reconnectCancellationTokenSource, reconnectCancellationTokenSource))
+                    {
+                        _reconnectCancellationTokenSource = null;
+                        _reconnectTask = null;
+                        shouldRestartReconnectLoop =
+                            Volatile.Read(ref _isRecoveringConnection) == 1 &&
+                            Volatile.Read(ref _automaticReconnectEnabled) == 1 &&
+                            Volatile.Read(ref _isDisposed) == 0;
+                    }
+                }
+                reconnectCancellationTokenSource.Dispose();
+                if (shouldRestartReconnectLoop)
+                {
+                    StartReconnectLoop();
+                }
+            }
+        }
+
+        internal static TimeSpan GetDefaultReconnectDelay(int attemptNumber)
+        {
+            if (attemptNumber <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(attemptNumber));
+            }
+
+            return DefaultReconnectDelays[Math.Min(attemptNumber, DefaultReconnectDelays.Length) - 1];
+        }
+
+        private TimeSpan GetReconnectDelay(int attemptNumber)
+        {
+            return _reconnectIntervalOverride ?? GetDefaultReconnectDelay(attemptNumber);
+        }
+
+        private TimeSpan GetConnectionOutage()
+        {
+            var connectionLostAtUtcTicks = Interlocked.Read(ref _connectionLostAtUtcTicks);
+            if (connectionLostAtUtcTicks == 0)
+            {
+                return TimeSpan.Zero;
+            }
+
+            var elapsedTicks = Math.Max(0, _timeProvider.GetUtcNow().Ticks - connectionLostAtUtcTicks);
+            return TimeSpan.FromTicks(elapsedTicks);
+        }
+
+        private int RecoverConnection(
+            CancellationToken cancellationToken,
+            ref string recoveryStage)
+        {
+            recoveryStage = "gateway-handshake";
+            var serverInformation = _gatewayClient.ServerInformation ??
+                throw new QmtGatewayProtocolException(
+                    "QMT Gateway reconnected without hello server information.");
+            _accountProperties = new QmtAccountProperties(serverInformation.IsSimulation);
+
+            recoveryStage = "account-query";
+            var accounts = SendRequest(
+                    QmtProtocol.Operations.QueryAccount,
+                    cancellationToken: cancellationToken)
+                .ToPayload<QmtQueryAccountPayload>()
+                .Accounts;
+            recoveryStage = "position-query";
+            var positions = SendRequest(
+                    QmtProtocol.Operations.QueryPositions,
+                    cancellationToken: cancellationToken)
+                .ToPayload<QmtQueryPositionsPayload>()
+                .Positions;
+            recoveryStage = "order-query";
+            var orders = SendRequest(
+                    QmtProtocol.Operations.QueryOrders,
+                    cancellationToken: cancellationToken)
+                .ToPayload<QmtQueryOrdersPayload>()
+                .Orders;
+            recoveryStage = "order-reconciliation";
+            foreach (var order in orders)
+            {
+                var leanOrderId = ResolveLeanOrderId(order.OrderId, order.ClientOrderId);
+                if (!leanOrderId.HasValue || _orderProvider.GetOrderById(leanOrderId.Value) == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(order.ClientOrderId))
+                {
+                    _leanOrderIdsByClientOrderId[order.ClientOrderId] = leanOrderId.Value;
+                }
+                if (!string.IsNullOrWhiteSpace(order.OrderId))
+                {
+                    RegisterNativeOrderId(order.OrderId, leanOrderId.Value);
+                }
+            }
+            Log.Trace(
+                $"QmtBrokerage.RecoverConnection(): stage=account-state status=ok " +
+                $"accounts={accounts.Count} positions={positions.Count} orders={orders.Count}");
+
+            recoveryStage = "subscription-restore";
+            return RestoreSubscriptions(cancellationToken);
+        }
+
+        private int RestoreSubscriptions(CancellationToken cancellationToken)
+        {
+            var restoredSubscriptionCount = 0;
+            foreach (var subscription in _subscriptions.ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var response = SendRequest(
+                    QmtProtocol.Operations.Subscribe,
+                    new QmtStockCodeRequest { StockCode = subscription.Key },
+                    cancellationToken);
+                var result = response.ToPayload<QmtSubscribePayload>();
+                if (!result.Subscribed || string.IsNullOrWhiteSpace(result.SubscriptionId))
+                {
+                    throw new QmtGatewayProtocolException(
+                        $"QMT Gateway did not restore subscription {subscription.Key}.");
+                }
+
+                if (_subscriptions.TryGetValue(subscription.Key, out var currentSubscriptionState) &&
+                    ReferenceEquals(currentSubscriptionState, subscription.Value) &&
+                    subscription.Value.TryReplaceSubscriptionId(result.SubscriptionId))
+                {
+                    restoredSubscriptionCount++;
+                    continue;
+                }
+
+                SendRequest(
+                    QmtProtocol.Operations.Unsubscribe,
+                    new QmtUnsubscribeRequest { SubscriptionId = result.SubscriptionId },
+                    cancellationToken);
+            }
+
+            Log.Trace(
+                $"QmtBrokerage.RestoreSubscriptions(): status=ok restored={restoredSubscriptionCount}");
+            return restoredSubscriptionCount;
+        }
+
+        private void CancelReconnectLoop()
+        {
+            CancellationTokenSource? reconnectCancellationTokenSource;
+            var reconnectLoopCanceled = false;
+            lock (_reconnectLock)
+            {
+                reconnectCancellationTokenSource = _reconnectCancellationTokenSource;
+                _reconnectCancellationTokenSource = null;
+                _reconnectTask = null;
+            }
+
+            try
+            {
+                if (reconnectCancellationTokenSource != null &&
+                    !reconnectCancellationTokenSource.IsCancellationRequested)
+                {
+                    reconnectCancellationTokenSource.Cancel();
+                    reconnectLoopCanceled = true;
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            if (reconnectLoopCanceled)
+            {
+                Log.Trace("QmtBrokerage.CancelReconnectLoop(): status=canceled");
+            }
         }
 
         private void EnsureConnected()
@@ -888,13 +1271,51 @@ namespace QuantConnect.Brokerages.Qmt
         {
             private readonly ConcurrentDictionary<int, MarketDataEnumerator> _enumerators =
                 new ConcurrentDictionary<int, MarketDataEnumerator>();
+            private readonly object _subscriptionLock = new object();
+            private string _subscriptionId;
+            private bool _isActive = true;
             private int _nextEnumeratorId;
             public int ReferenceCount;
-            public string SubscriptionId { get; }
+            public Symbol Symbol { get; }
 
-            public SubscriptionState(string subscriptionId)
+            public string SubscriptionId
             {
-                SubscriptionId = subscriptionId;
+                get
+                {
+                    lock (_subscriptionLock)
+                    {
+                        return _subscriptionId;
+                    }
+                }
+            }
+
+            public SubscriptionState(string subscriptionId, Symbol symbol)
+            {
+                _subscriptionId = subscriptionId;
+                Symbol = symbol;
+            }
+
+            public bool TryReplaceSubscriptionId(string subscriptionId)
+            {
+                lock (_subscriptionLock)
+                {
+                    if (!_isActive)
+                    {
+                        return false;
+                    }
+
+                    _subscriptionId = subscriptionId;
+                    return true;
+                }
+            }
+
+            public string Deactivate()
+            {
+                lock (_subscriptionLock)
+                {
+                    _isActive = false;
+                    return _subscriptionId;
+                }
             }
 
             public IEnumerator<BaseData> CreateEnumerator(TickType tickType, EventHandler newDataAvailableHandler)
@@ -921,6 +1342,7 @@ namespace QuantConnect.Brokerages.Qmt
 
             public void Dispose()
             {
+                Deactivate();
                 foreach (var enumerator in _enumerators.Values)
                 {
                     enumerator.Dispose();

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\Lean\Common\Properties\SharedAssemblyInfo.cs" Link="Properties\SharedAssemblyInfo.cs" />
+    <EmbeddedResource Include="Resources\china-trading-calendar.json" LogicalName="QuantConnect.Brokerages.Qmt.china-trading-calendar.json" />
   </ItemGroup>
 
   <ItemGroup>

@@ -56,8 +56,10 @@ make test-smoke
 
 `make test-readonly` 直接构造真实 `QmtGatewayClient` 和 `QmtBrokerage`，
 验证账号握手、资金、持仓、未完成委托、日线/分钟历史、订阅、退订和主动断开后的
-连接重建。`make test-smoke` 独立运行完整 LEAN live smoke。两者都不验证自动故障恢复，
-测试代码只执行查询和行情订阅，不调用下单接口。
+连接重建。`make test-smoke` 独立运行完整 LEAN live smoke。这两个真实 Gateway 测试不注入
+传输故障；定时自动重连由合同测试覆盖。测试代码只执行查询和行情订阅，不调用下单接口。
+Windows 构建和打包开始前会校验嵌入的 A 股交易日日历是否覆盖当天；覆盖不足会直接失败，
+不会按普通工作日继续部署。
 精简证据由 Windows Nginx 暴露：
 
 ```text
@@ -105,11 +107,16 @@ lean live deploy C:\Users\nemo\lean_project\<project> `
   --detach
 ```
 
-不需要在 `lean-qmt.json` 配置模拟/实盘或 MarketOrder style。Gateway hello 会从
-当前运行的 QMT 终端自动返回账号属性：模拟终端使用最新价 `price_type=5`；实盘终端
-使用 `five-level-immediate-or-cancel`，沪市/北市映射为 `42`、深市映射为 `47`。
-QMT 模拟交易不支持原生股票市价类型 `42-48`。模拟账号在工作日 10:00–17:00 之外
-会在调用 QMT 前明确拒单，避免 `passorder` 静默丢弃请求。
+不需要在 `lean-qmt.json` 配置模拟/实盘。Gateway hello 会从当前运行的 QMT 终端
+自动返回是否连接模拟柜台，这一属性只控制工作日 10:00–17:00 的下单时段保护。
+每个市场单仍必须通过 `QmtOrderProperties.MarketOrderStyle` 显式指定价格类型；
+`latest-price` 映射为 `5`，`five-level-immediate-or-cancel` 在沪市/北市映射为
+`42`、深市映射为 `47`。虽然 QMT 文档称模拟交易不支持原生股票市价类型
+`42-48`，当前模拟柜台已经由真实 E2E 验证沪市类型 `42` 可以成交。
+
+QMT“模型交易”里的策略运行模式和柜台类型是两件事。即使选择模拟账号，也必须把
+Gateway 策略的运行模式设为“实盘”，否则 QMT 会在信号到达柜台前直接丢弃订单。
+这项 UI 设置不会改变资金柜台，也不代表使用真实资金。
 
 先验证资金、持仓、未完成委托和实时行情，再在确认当前 QMT 账号后显式运行交易测试。
 
@@ -125,7 +132,7 @@ make test            # 同步、Windows 测试并发布版本化本地 DLL
 make test-readonly   # 只跑真实 Brokerage 非交易 E2E
 make test-smoke      # 只跑完整 LEAN live smoke
 make test-trading
-make test-trading-inventory # 成交并增加 100 股 T+0 持仓
+make test-trading TEST_CASE=MarketBuyIncreasesHoldingAndSameDaySellIsRejected
 ```
 
 `make test-trading` 要求 Gateway `hello` 返回的账号与 `lean-qmt.json` 完全一致。
@@ -134,13 +141,13 @@ make test-trading-inventory # 成交并增加 100 股 T+0 持仓
 MarketOrder 抛出 `MarketClosed`。本地非法订单 case 属于 unit/contract，不连接
 QMT。清理只有在遗留订单确认 `Canceled` 且不再出现在 open orders 后才算成功。
 
-`make test-trading-inventory` 是独立的状态型 E2E：每次买入 100 股并验证成交量、
-成交价、`query_orders` 以及持仓准确增加 100 股。每次执行都会增加 100 股 T+0
-持仓。日志为：
+通过 `TEST_CASE` 从同一命令选择状态型 T+1 E2E：每次买入 100 股，确认总持仓增加
+但可用持仓不增加，然后尝试卖出原可用数量加上这 100 股。QMT 必须原生拒单并返回
+`[COUNTER][251005][证券可用数量不足]`；测试还会验证成交量为 0、总持仓和可用持仓
+不变且没有遗留 open order。每次执行都会增加 100 股当日持仓。日志为：
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log
-http://192.168.50.135:8000/e2e/test-trading-inventory.log
 ```
 
 日志保存在：

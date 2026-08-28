@@ -135,6 +135,9 @@ namespace QuantConnect.Brokerages.Qmt
         [JsonProperty("volume")]
         public decimal Volume { get; set; }
 
+        [JsonProperty("available_volume")]
+        public decimal AvailableVolume { get; set; }
+
         [JsonProperty("open_price")]
         public decimal OpenPrice { get; set; }
 

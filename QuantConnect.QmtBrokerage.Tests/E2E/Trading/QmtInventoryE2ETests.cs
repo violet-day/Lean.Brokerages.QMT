@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using NUnit.Framework;
 using QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure;
 using QuantConnect.Orders;
@@ -6,7 +7,7 @@ using QuantConnect.Orders;
 namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
 {
     [TestFixture]
-    [Explicit("Buys 100 shares through the real QMT simulation account.")]
+    [Explicit("Buys 100 shares and verifies the real QMT simulation counter rejects their same-day sale.")]
     [Category(QmtE2ETestCategories.TradingInventory)]
     [NonParallelizable]
     public class QmtInventoryE2ETests
@@ -20,8 +21,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
         }
 
         [Test]
-        [Timeout(180000)]
-        public void MarketBuyIncreasesHoldingByFilledQuantity()
+        [Timeout(240000)]
+        public void MarketBuyIncreasesHoldingAndSameDaySellIsRejected()
         {
             if (!QmtTradingTestContext.IsSimulationSessionOpen())
             {
@@ -32,51 +33,134 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Trading
             _context.Run(() =>
             {
                 var initialHoldingQuantity = _context.GetTradingHoldingQuantity();
-                var order = _context.CreateMarketOrder(
+                var initialAvailableQuantity = _context.GetTradingAvailableQuantity();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(initialAvailableQuantity, Is.GreaterThanOrEqualTo(0m));
+                    Assert.That(initialAvailableQuantity, Is.LessThanOrEqualTo(initialHoldingQuantity));
+                });
+
+                var buyOrder = _context.CreateMarketOrder(
                     QmtTradingTestContext.TradingQuantity,
-                    QmtMarketOrderStyle.LatestPrice);
+                    QmtMarketOrderStyle.FiveLevelImmediateOrCancel);
                 _context.WriteStage(
-                    "market-order",
+                    "t-plus-one-buy",
                     "start",
-                    $"stock_code={QmtTradingTestContext.TradingStockCode} quantity={order.Quantity} " +
-                    $"market_order_style=latest-price initial_holding={initialHoldingQuantity} " +
-                    "inventory_effect=t-plus-zero-buy");
+                    $"stock_code={QmtTradingTestContext.TradingStockCode} quantity={buyOrder.Quantity} " +
+                    $"initial_holding={initialHoldingQuantity} initial_available={initialAvailableQuantity}");
                 Assert.That(
-                    _context.Brokerage.PlaceOrder(order),
+                    _context.Brokerage.PlaceOrder(buyOrder),
                     Is.True,
-                    "QMT rejected the market buy request.");
+                    "QMT rejected the T+1 setup market buy request.");
                 Assert.That(
                     _context.WaitForStatus(
-                        order,
+                        buyOrder,
                         TimeSpan.FromSeconds(60),
                         OrderStatus.Filled,
                         OrderStatus.Invalid,
                         OrderStatus.Canceled),
                     Is.EqualTo(OrderStatus.Filled),
-                    "The market buy did not reach Filled.");
-                var filledOrderSnapshot = _context.WaitForOrderSnapshot(
-                    order,
+                    "The T+1 setup market buy did not reach Filled.");
+                var filledBuySnapshot = _context.WaitForOrderSnapshot(
+                    buyOrder,
                     TimeSpan.FromSeconds(15),
                     orderSnapshot =>
                         QmtOrderStatusMapper.GetLeanOrderStatus(orderSnapshot.Status) == OrderStatus.Filled);
-                Assert.That(filledOrderSnapshot, Is.Not.Null, "query_orders did not report the market buy as filled.");
-                Assert.That(filledOrderSnapshot!.TradedVolume, Is.EqualTo(QmtTradingTestContext.TradingQuantity));
-                Assert.That(filledOrderSnapshot.TradedPrice, Is.GreaterThan(0m));
+                Assert.That(filledBuySnapshot, Is.Not.Null, "query_orders did not report the T+1 setup buy as filled.");
+                var confirmedBuySnapshot = filledBuySnapshot!;
+                Assert.That(confirmedBuySnapshot.TradedVolume, Is.EqualTo(QmtTradingTestContext.TradingQuantity));
 
-                var expectedHoldingQuantity = initialHoldingQuantity + QmtTradingTestContext.TradingQuantity;
-                var finalHoldingQuantity = _context.WaitForTradingHoldingQuantity(
-                    expectedHoldingQuantity,
+                var holdingQuantityAfterBuy = initialHoldingQuantity + QmtTradingTestContext.TradingQuantity;
+                Assert.That(
+                    _context.WaitForTradingHoldingQuantity(
+                        holdingQuantityAfterBuy,
+                        TimeSpan.FromSeconds(15)),
+                    Is.EqualTo(holdingQuantityAfterBuy),
+                    "QMT positions did not include the filled same-day buy.");
+                var availableQuantityAfterBuy = _context.WaitForTradingAvailableQuantity(
+                    initialAvailableQuantity,
                     TimeSpan.FromSeconds(15));
                 Assert.That(
-                    finalHoldingQuantity,
-                    Is.EqualTo(expectedHoldingQuantity),
-                    "QMT positions did not increase by the filled market-buy quantity.");
+                    availableQuantityAfterBuy,
+                    Is.EqualTo(initialAvailableQuantity),
+                    "The same-day buy incorrectly increased the sellable position quantity.");
                 _context.WriteStage(
-                    "market-order",
+                    "t-plus-one-buy",
                     "ok",
-                    $"native_order_id={filledOrderSnapshot.OrderId} final_status=Filled " +
-                    $"traded_volume={filledOrderSnapshot.TradedVolume} traded_price={filledOrderSnapshot.TradedPrice} " +
-                    $"initial_holding={initialHoldingQuantity} final_holding={finalHoldingQuantity}");
+                    $"native_order_id={confirmedBuySnapshot.OrderId} final_status=Filled " +
+                    $"holding_after_buy={holdingQuantityAfterBuy} available_after_buy={availableQuantityAfterBuy}");
+
+                var attemptedSellQuantity = initialAvailableQuantity + QmtTradingTestContext.TradingQuantity;
+                Assert.That(attemptedSellQuantity, Is.LessThanOrEqualTo(holdingQuantityAfterBuy));
+                var sellOrder = _context.CreateMarketOrder(
+                    -attemptedSellQuantity,
+                    QmtMarketOrderStyle.FiveLevelImmediateOrCancel);
+                _context.WriteStage(
+                    "t-plus-one-sell",
+                    "start",
+                    $"stock_code={QmtTradingTestContext.TradingStockCode} quantity={sellOrder.Quantity} " +
+                    $"holding={holdingQuantityAfterBuy} available={availableQuantityAfterBuy} " +
+                    $"unavailable_quantity={holdingQuantityAfterBuy - availableQuantityAfterBuy}");
+                Assert.That(
+                    _context.Brokerage.PlaceOrder(sellOrder),
+                    Is.True,
+                    "The Gateway did not submit the intentional T+1 violation to QMT.");
+                var rejectedSellEvent = _context.WaitForOrderEvent(
+                    sellOrder,
+                    TimeSpan.FromSeconds(60),
+                    OrderStatus.Invalid,
+                    OrderStatus.PartiallyFilled,
+                    OrderStatus.Filled,
+                    OrderStatus.Canceled);
+                Assert.That(rejectedSellEvent, Is.Not.Null, "QMT did not return a terminal result for the same-day sell.");
+                Assert.That(
+                    rejectedSellEvent!.Status,
+                    Is.EqualTo(OrderStatus.Invalid),
+                    "QMT did not reject the sell quantity that exceeded the available T+1 position.");
+                Assert.That(
+                    rejectedSellEvent.Message,
+                    Does.Contain("cancel_information=[COUNTER][251005][证券可用数量不足]"),
+                    "QMT rejected the same-day sell for a reason other than the A-share available-position rule.");
+                var confirmedRejectedSellEvent = rejectedSellEvent!;
+
+                var rejectedSellSnapshot = _context.WaitForOrderSnapshot(
+                    sellOrder,
+                    TimeSpan.FromSeconds(15),
+                    orderSnapshot =>
+                        QmtOrderStatusMapper.GetLeanOrderStatus(orderSnapshot.Status) == OrderStatus.Invalid);
+                Assert.That(rejectedSellSnapshot, Is.Not.Null, "query_orders did not report the same-day sell as Invalid.");
+                var confirmedRejectedSellSnapshot = rejectedSellSnapshot!;
+                Assert.That(confirmedRejectedSellSnapshot.TradedVolume, Is.EqualTo(0m));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(
+                        _context.WaitForTradingHoldingQuantity(
+                            holdingQuantityAfterBuy,
+                            TimeSpan.FromSeconds(15)),
+                        Is.EqualTo(holdingQuantityAfterBuy),
+                        "The rejected same-day sell changed the total position.");
+                    Assert.That(
+                        _context.WaitForTradingAvailableQuantity(
+                            initialAvailableQuantity,
+                            TimeSpan.FromSeconds(15)),
+                        Is.EqualTo(initialAvailableQuantity),
+                        "The rejected same-day sell changed the available position.");
+                    Assert.That(
+                        _context.Brokerage.GetOpenOrders().Any(openOrder =>
+                            openOrder.BrokerId.Contains(confirmedRejectedSellSnapshot.OrderId)),
+                        Is.False,
+                        "The rejected same-day sell is still returned as open.");
+                });
+                var rejectionMessage = confirmedRejectedSellEvent.Message
+                    .Replace("\"", "'")
+                    .Replace("\r", " ")
+                    .Replace("\n", " ");
+                _context.WriteStage(
+                    "t-plus-one-sell",
+                    "ok",
+                    $"native_order_id={confirmedRejectedSellSnapshot.OrderId} final_status=Invalid traded_volume=0 " +
+                    $"holding_unchanged={holdingQuantityAfterBuy} available_unchanged={initialAvailableQuantity} " +
+                    $"rejection=\"{rejectionMessage}\"");
             });
         }
     }

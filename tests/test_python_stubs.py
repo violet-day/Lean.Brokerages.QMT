@@ -25,6 +25,7 @@ class PythonStubTests(unittest.TestCase):
         self.assertEqual(
             {
                 "QmtBrokerageModel",
+                "QmtMarket",
                 "QmtMarketOrderStyle",
                 "QmtOrderProperties",
             },
@@ -49,6 +50,32 @@ class PythonStubTests(unittest.TestCase):
                 "FILL_OR_KILL",
             },
             enum_member_names,
+        )
+
+        market_member_names = {
+            statement.target.id
+            for statement in classes_by_name["QmtMarket"].body
+            if isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+        }
+        self.assertEqual(
+            {
+                "NAME",
+                "ACCOUNT_CURRENCY",
+                "calendar_coverage_start",
+                "calendar_coverage_end",
+                "calendar_source",
+            },
+            market_member_names,
+        )
+        market_method_names = {
+            node.name
+            for node in classes_by_name["QmtMarket"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {"register_metadata", "is_trading_day", "ensure_calendar_covers"},
+            market_method_names,
         )
 
         order_property_method_names = {

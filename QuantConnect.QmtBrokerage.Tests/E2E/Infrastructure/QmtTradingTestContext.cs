@@ -22,8 +22,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
         private readonly QCAlgorithm _algorithm;
         private readonly TradingOrderProvider _orderProvider;
         private readonly List<Order> _createdOrders = new List<Order>();
-        private readonly ConcurrentDictionary<int, ConcurrentQueue<OrderStatus>> _statusesByOrderId = new();
-        private readonly ConcurrentDictionary<int, ManualResetEventSlim> _statusSignalsByOrderId = new();
+        private readonly ConcurrentDictionary<int, ConcurrentQueue<OrderEvent>> _orderEventsByOrderId = new();
+        private readonly ConcurrentDictionary<int, ManualResetEventSlim> _orderEventSignalsByOrderId = new();
         private readonly QmtSymbolMapper _symbolMapper = new QmtSymbolMapper();
         private bool _disposed;
 
@@ -195,6 +195,16 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 .Sum(holding => holding.Quantity);
         }
 
+        public decimal GetTradingAvailableQuantity()
+        {
+            return QueryPositions()
+                .Where(position => string.Equals(
+                    position.StockCode,
+                    TradingStockCode,
+                    StringComparison.Ordinal))
+                .Sum(position => position.AvailableVolume);
+        }
+
         public decimal WaitForTradingHoldingQuantity(decimal expectedQuantity, TimeSpan timeout)
         {
             var deadline = DateTime.UtcNow.Add(timeout);
@@ -207,27 +217,47 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             return quantity;
         }
 
+        public decimal WaitForTradingAvailableQuantity(decimal expectedQuantity, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow.Add(timeout);
+            var quantity = GetTradingAvailableQuantity();
+            while (quantity != expectedQuantity && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(250);
+                quantity = GetTradingAvailableQuantity();
+            }
+            return quantity;
+        }
+
         public OrderStatus WaitForStatus(
             Order order,
             TimeSpan timeout,
             params OrderStatus[] expectedStatuses)
         {
-            var receivedStatuses = _statusesByOrderId[order.Id];
-            var statusChanged = _statusSignalsByOrderId[order.Id];
+            return WaitForOrderEvent(order, timeout, expectedStatuses)?.Status ?? OrderStatus.None;
+        }
+
+        public OrderEvent? WaitForOrderEvent(
+            Order order,
+            TimeSpan timeout,
+            params OrderStatus[] expectedStatuses)
+        {
+            var receivedOrderEvents = _orderEventsByOrderId[order.Id];
+            var orderEventReceived = _orderEventSignalsByOrderId[order.Id];
             var deadline = DateTime.UtcNow.Add(timeout);
             while (DateTime.UtcNow < deadline)
             {
-                while (receivedStatuses.TryDequeue(out var receivedStatus))
+                while (receivedOrderEvents.TryDequeue(out var receivedOrderEvent))
                 {
-                    if (expectedStatuses.Contains(receivedStatus))
+                    if (expectedStatuses.Contains(receivedOrderEvent.Status))
                     {
-                        return receivedStatus;
+                        return receivedOrderEvent;
                     }
                 }
-                statusChanged.Wait(TimeSpan.FromMilliseconds(250));
-                statusChanged.Reset();
+                orderEventReceived.Wait(TimeSpan.FromMilliseconds(250));
+                orderEventReceived.Reset();
             }
-            return OrderStatus.None;
+            return null;
         }
 
         public string? WaitForNativeOrderId(Order order, TimeSpan timeout)
@@ -266,9 +296,13 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
         public QmtOrderSnapshot? FindOrderSnapshot(Order order)
         {
             var nativeOrderId = order.BrokerId.FirstOrDefault();
-            return QueryOrders().FirstOrDefault(snapshot =>
-                (!string.IsNullOrWhiteSpace(nativeOrderId) &&
-                    string.Equals(snapshot.OrderId, nativeOrderId, StringComparison.Ordinal)) ||
+            var orderSnapshots = QueryOrders();
+            if (!string.IsNullOrWhiteSpace(nativeOrderId))
+            {
+                return orderSnapshots.FirstOrDefault(snapshot =>
+                    string.Equals(snapshot.OrderId, nativeOrderId, StringComparison.Ordinal));
+            }
+            return orderSnapshots.FirstOrDefault(snapshot =>
                 string.Equals(
                     snapshot.ClientOrderId,
                     order.Id.ToStringInvariant(),
@@ -283,6 +317,16 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 .GetResult()
                 .ToPayload<QmtQueryOrdersPayload>()
                 .Orders;
+        }
+
+        public List<QmtPositionSnapshot> QueryPositions()
+        {
+            return GatewayClient
+                .SendRequestAsync(QmtProtocol.Operations.QueryPositions)
+                .GetAwaiter()
+                .GetResult()
+                .ToPayload<QmtQueryPositionsPayload>()
+                .Positions;
         }
 
         public void WriteStage(string stage, string status, string details = "")
@@ -309,9 +353,9 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                 Brokerage.OrderIdChanged -= HandleOrderIdChanged;
                 Brokerage.OrdersStatusChanged -= HandleOrderStatusChanged;
                 Brokerage.Dispose();
-                foreach (var statusSignal in _statusSignalsByOrderId.Values)
+                foreach (var orderEventSignal in _orderEventSignalsByOrderId.Values)
                 {
-                    statusSignal.Dispose();
+                    orderEventSignal.Dispose();
                 }
             }
         }
@@ -336,8 +380,8 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             var order = Order.CreateOrder(submitOrderRequest);
             _orderProvider.Add(order);
             _createdOrders.Add(order);
-            _statusesByOrderId[order.Id] = new ConcurrentQueue<OrderStatus>();
-            _statusSignalsByOrderId[order.Id] = new ManualResetEventSlim(false);
+            _orderEventsByOrderId[order.Id] = new ConcurrentQueue<OrderEvent>();
+            _orderEventSignalsByOrderId[order.Id] = new ManualResetEventSlim(false);
             return order;
         }
 
@@ -351,13 +395,13 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
             foreach (var orderEvent in orderEvents)
             {
                 _orderProvider.ApplyOrderStatus(orderEvent.OrderId, orderEvent.Status);
-                if (!_statusesByOrderId.TryGetValue(orderEvent.OrderId, out var receivedStatuses) ||
-                    !_statusSignalsByOrderId.TryGetValue(orderEvent.OrderId, out var statusChanged))
+                if (!_orderEventsByOrderId.TryGetValue(orderEvent.OrderId, out var receivedOrderEvents) ||
+                    !_orderEventSignalsByOrderId.TryGetValue(orderEvent.OrderId, out var orderEventReceived))
                 {
                     continue;
                 }
-                receivedStatuses.Enqueue(orderEvent.Status);
-                statusChanged.Set();
+                receivedOrderEvents.Enqueue(orderEvent);
+                orderEventReceived.Set();
                 var orderMessage = orderEvent.Message.Replace("\"", "'").Replace("\r", " ").Replace("\n", " ");
                 WriteEvidence(
                     "order-callback",

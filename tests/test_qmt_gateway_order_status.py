@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 class NativeOrder:
-    m_strInstrumentID = "600000.SH"
+    m_strExchangeID = "SH"
+    m_strInstrumentID = "600000"
     m_strOrderSysID = "native-order-1"
     m_strRemark = "42"
     m_nDirection = 48
@@ -60,6 +61,7 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         normalized_order = self.gateway_module._normalize_order(NativeOrder())
 
         self.assertEqual(57, normalized_order["status"])
+        self.assertEqual("600000.SH", normalized_order["stock_code"])
         self.assertEqual(52, normalized_order["submit_status"])
         self.assertEqual(1001, normalized_order["error_id"])
         self.assertEqual("price outside limit", normalized_order["error_message"])
@@ -68,7 +70,7 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
             normalized_order["cancel_information"],
         )
 
-    def test_uses_client_order_id_as_passorder_user_order_id(self):
+    def test_uses_immediate_quick_trade_and_client_order_id(self):
         passorder_arguments = []
 
         def record_passorder_arguments(*arguments):
@@ -94,6 +96,7 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         self.assertTrue(response["accepted"])
         self.assertEqual("42", response["client_order_id"])
         self.assertEqual(1, len(passorder_arguments))
+        self.assertEqual(2, passorder_arguments[0][8])
         self.assertEqual("42", passorder_arguments[0][9])
 
     def test_preserves_raw_passorder_result(self):
@@ -115,6 +118,30 @@ class QmtGatewayOrderStatusTests(unittest.TestCase):
         )
 
         self.assertEqual("-1", response["passorder_result"])
+
+    def test_enriches_callback_strategy_name_from_gateway_submission(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="order-status-test",
+            passorder_function=lambda *arguments: 0,
+        )
+        gateway._place_order(
+            {
+                "client_order_id": "42",
+                "stock_code": "600000.SH",
+                "order_type": "limit",
+                "direction": "buy",
+                "quantity": 100,
+                "limit_price": 10.5,
+                "strategy_name": "ATopGainerGateway",
+            }
+        )
+
+        order = gateway._enrich_order_with_submission(
+            self.gateway_module._normalize_order(NativeOrder())
+        )
+
+        self.assertEqual("ATopGainerGateway", order["strategy_name"])
 
     def test_maps_market_order_styles_to_qmt_price_types(self):
         test_cases = (

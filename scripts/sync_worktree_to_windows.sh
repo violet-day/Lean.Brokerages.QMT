@@ -6,6 +6,8 @@ repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 windows_git_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT'
 windows_workspace_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
 windows_workspace_manifest_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace-files'
+windows_gateway_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py'
+windows_workspace_gateway_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace\qmt_python\lean_qmt_gateway.py'
 windows_action='sync'
 push_repository=true
 parent_task_path="${QMT_TASK_PATH:-}"
@@ -43,6 +45,7 @@ if [[ "$windows_action" == 'package' ]]; then
     windows_test_log_name='windows-package.log'
 fi
 windows_test_log_path="$test_log_directory/$windows_test_log_name"
+verified_package_input_fingerprint_path="$test_log_directory/verified-package-input.sha256"
 
 list_snapshot_files() {
     git -C "$repository_directory" ls-files --cached --others --exclude-standard -z \
@@ -51,6 +54,33 @@ list_snapshot_files() {
                 printf '%s\0' "$relative_path"
             fi
         done
+}
+
+calculate_package_input_fingerprint() {
+    local relative_path
+
+    {
+        printf 'schema_version=1\n'
+        while IFS= read -r -d '' relative_path; do
+            case "$relative_path" in
+                */bin/*|*/obj/*)
+                    continue
+                    ;;
+            esac
+            if [[ ! -f "$repository_directory/$relative_path" ]]; then
+                continue
+            fi
+            printf 'file:%s\n' "$relative_path"
+            shasum -a 256 "$repository_directory/$relative_path" | awk '{print $1}'
+        done < <(
+            git -C "$repository_directory" ls-files --cached --others --exclude-standard -z -- \
+                QuantConnect.QmtBrokerage \
+                QuantConnect.QmtBrokerage.Tests \
+                qmt_python/lean_qmt_gateway.py \
+                scripts \
+                global.json
+        )
+    } | shasum -a 256 | awk '{print $1}'
 }
 
 if [[ -z "$parent_task_path" ]]; then
@@ -67,6 +97,25 @@ repository_commit="$(git -C "$repository_directory" rev-parse HEAD)"
 snapshot_file_count="$(list_snapshot_files | tr -cd '\0' | wc -c | tr -d ' ')"
 snapshot_change_count="$(git -C "$repository_directory" status --porcelain | wc -l | tr -d ' ')"
 sync_started_at_seconds="$(date +%s)"
+package_input_fingerprint=''
+
+if [[ "$windows_action" != 'sync' ]]; then
+    package_input_fingerprint="$(calculate_package_input_fingerprint)"
+fi
+
+if [[ "$windows_action" == 'package' ]]; then
+    verified_package_input_fingerprint=''
+    package_input_cache_miss_reason='verified-input-missing'
+    if [[ -f "$verified_package_input_fingerprint_path" ]]; then
+        verified_package_input_fingerprint="$(<"$verified_package_input_fingerprint_path")"
+        package_input_cache_miss_reason='input-changed'
+    fi
+    if [[ "$package_input_fingerprint" == "$verified_package_input_fingerprint" ]]; then
+        echo "[qmt-test] host=mac stage=package-input-cache status=hit action=skip-windows-package fingerprint=$package_input_fingerprint"
+        exit 0
+    fi
+    echo "[qmt-test] host=mac stage=package-input-cache status=miss reason=$package_input_cache_miss_reason fingerprint=$package_input_fingerprint"
+fi
 
 if [[ "$push_repository" == true ]]; then
     echo "[qmt-test] host=mac stage=git-push status=start branch=$repository_branch commit=$repository_commit"
@@ -93,6 +142,8 @@ extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [C
 
 write_snapshot_manifest_command="\$ErrorActionPreference = 'Stop'; \$manifestBase64 = [Console]::In.ReadToEnd(); [System.IO.File]::WriteAllBytes('$windows_workspace_manifest_path', [Convert]::FromBase64String(\$manifestBase64)); '[qmt-test] host=windows stage=workspace-snapshot status=ok files=$snapshot_file_count changes=$snapshot_change_count path=$windows_workspace_directory'"
 
+deploy_gateway_source_command="\$ErrorActionPreference = 'Stop'; \$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_source_path').Hash; \$destinationHash = if (Test-Path -LiteralPath '$windows_gateway_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_source_path').Hash } else { '' }; if (\$sourceHash -ne \$destinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_source_path' -Destination '$windows_gateway_source_path' -Force; \$action = 'update' } else { \$action = 'none' }; \$gatewaySource = Get-Item -LiteralPath '$windows_gateway_source_path'; \"[qmt-test] host=windows stage=gateway-source status=ok action=\$action bytes=\$(\$gatewaySource.Length) sha256=\$sourceHash path=\$(\$gatewaySource.FullName)\""
+
 run_windows_command="\$ErrorActionPreference = 'Stop'; if ('$windows_action' -eq 'test') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }; if ('$windows_action' -eq 'package') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path' -EnsurePackage; exit \$LASTEXITCODE }"
 
 remote_action_started_at_seconds="$(date +%s)"
@@ -112,10 +163,19 @@ list_snapshot_files \
     | invoke_windows_powershell "$write_snapshot_manifest_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee -a "$windows_test_log_path"
+invoke_windows_powershell "$deploy_gateway_source_command" 2>&1 \
+    | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
+    | tee -a "$windows_test_log_path"
 if [[ "$windows_action" != 'sync' ]]; then
     invoke_windows_powershell "$run_windows_command" 2>&1 \
         | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
         | tee -a "$windows_test_log_path"
+fi
+if [[ -n "$package_input_fingerprint" ]]; then
+    mkdir -p "$test_log_directory"
+    printf '%s\n' "$package_input_fingerprint" > "$verified_package_input_fingerprint_path.tmp"
+    mv "$verified_package_input_fingerprint_path.tmp" "$verified_package_input_fingerprint_path"
+    echo "[qmt-test] host=mac stage=package-input-cache status=updated action=record-verified fingerprint=$package_input_fingerprint"
 fi
 remote_action_duration_seconds="$(( $(date +%s) - remote_action_started_at_seconds ))"
 sync_duration_seconds="$(( $(date +%s) - sync_started_at_seconds ))"

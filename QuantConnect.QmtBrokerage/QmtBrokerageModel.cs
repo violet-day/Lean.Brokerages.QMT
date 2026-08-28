@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using QuantConnect.Benchmarks;
+using QuantConnect.Interfaces;
 using QuantConnect.Orders;
+using QuantConnect.Orders.Fees;
 using QuantConnect.Securities;
 using QuantConnect.Util;
 
@@ -11,7 +13,7 @@ namespace QuantConnect.Brokerages.Qmt
     /// <summary>
     /// Defines the capabilities supported by the QMT brokerage MVP.
     /// </summary>
-    public sealed class QmtBrokerageModel : DefaultBrokerageModel
+    public sealed class QmtBrokerageModel : DefaultBrokerageModel, IAccountCurrencyProvider
     {
         private static readonly HashSet<OrderType> SupportedOrderTypes = new HashSet<OrderType>
         {
@@ -24,6 +26,8 @@ namespace QuantConnect.Brokerages.Qmt
                 .ToDictionary(entry => entry.Key, entry =>
                     entry.Key == SecurityType.Equity ? QmtSymbolMapper.RegisteredMarketName : entry.Value)
                 .ToReadOnlyDictionary();
+
+        public string AccountCurrency => QmtMarket.AccountCurrency;
 
         public QmtBrokerageModel()
             : base(AccountType.Cash)
@@ -90,6 +94,11 @@ namespace QuantConnect.Brokerages.Qmt
         public override decimal GetLeverage(Security security)
         {
             return 1m;
+        }
+
+        public override IFeeModel GetFeeModel(Security security)
+        {
+            return new ConstantFeeModel(0m, QmtMarket.AccountCurrency);
         }
 
         public override IBenchmark GetBenchmark(SecurityManager securities)

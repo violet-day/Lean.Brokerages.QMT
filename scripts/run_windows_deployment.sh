@@ -6,21 +6,35 @@ repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 windows_repository_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
 action="${1:-}"
 task_path="${QMT_TASK_PATH:-${QMT_ROOT_TASK:-$action}}"
+selected_test_case="${TEST_CASE:-}"
 skip_sync=false
 
-if [[ "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" && "$action" != "test-trading-inventory" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
+if [[ "$action" != "test-readonly" && "$action" != "test-smoke" && "$action" != "test-trading" ]]; then
+    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
     exit 2
 fi
 if [[ "${2:-}" == "--skip-sync" ]]; then
     skip_sync=true
 elif [[ -n "${2:-}" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
+    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
     exit 2
 fi
 if [[ -n "${3:-}" ]]; then
-    echo "usage: $0 {test-readonly|test-smoke|test-trading|test-trading-inventory} [--skip-sync]" >&2
+    echo "usage: $0 {test-readonly|test-smoke|test-trading} [--skip-sync]" >&2
     exit 2
+fi
+if [[ -n "$selected_test_case" && ! "$selected_test_case" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "TEST_CASE must be an NUnit method name containing only letters, digits, and underscores." >&2
+    exit 2
+fi
+if [[ -n "$selected_test_case" && "$action" != "test-trading" ]]; then
+    echo "TEST_CASE is supported only by test-trading." >&2
+    exit 2
+fi
+
+test_case_argument=""
+if [[ -n "$selected_test_case" ]]; then
+    test_case_argument=" -TestCaseName '$selected_test_case'"
 fi
 
 echo "[qmt-task] $task_path"
@@ -48,13 +62,7 @@ case "$action" in
         trading_test_path="$windows_repository_directory\\scripts\\test_windows_brokerage_e2e_trading.ps1"
         trading_e2e_task_path="$task_path > trading-e2e"
         echo "[qmt-task] $trading_e2e_task_path"
-        remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path'"
-        ;;
-    test-trading-inventory)
-        trading_test_path="$windows_repository_directory\\scripts\\test_windows_brokerage_e2e_trading.ps1"
-        trading_e2e_task_path="$task_path > inventory-e2e"
-        echo "[qmt-task] $trading_e2e_task_path"
-        remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path' -TestCategory 'QmtTradingInventory' -LogFileName 'test-trading-inventory.log' -RequireCompleted"
+        remote_command="& '$trading_test_path' -RepositoryPath '$windows_repository_directory' -TaskPath '$trading_e2e_task_path'$test_case_argument"
         ;;
 esac
 

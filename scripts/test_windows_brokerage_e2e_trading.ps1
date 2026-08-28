@@ -7,8 +7,8 @@ param(
     [int]$GatewayPort = 17890,
     [string]$TaskPath = "test-trading > trading-e2e",
     [string]$TestCategory = "QmtTradingRepeatable",
+    [string]$TestCaseName = "",
     [string]$LogFileName = "test-trading.log",
-    [switch]$RequireCompleted,
     [string]$LeanVersion = "",
     [string]$TargetFramework = ""
 )
@@ -78,8 +78,20 @@ function Invoke-StreamingTestCommand {
     }
 }
 
+$selectedTestCaseName = $TestCaseName.Trim()
+if ($selectedTestCaseName -and $selectedTestCaseName -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") {
+    throw "TestCaseName must be an NUnit method name containing only letters, digits, and underscores."
+}
+$testFilter = if ($selectedTestCaseName) {
+    "Name=$selectedTestCaseName"
+}
+else {
+    "TestCategory=$TestCategory"
+}
+$testCaseLabel = if ($selectedTestCaseName) { $selectedTestCaseName } else { "all" }
+
 $currentStage = "preflight"
-Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start category=$TestCategory account_source=gateway_hello stock_code=600000.SH quantity=100"
+Write-TradingEvidence "[qmt-trading-e2e] stage=run status=start category=$TestCategory test_case=$testCaseLabel account_source=gateway_hello stock_code=600000.SH quantity=100"
 try {
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=start"
     if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
@@ -164,7 +176,7 @@ try {
         "--no-build",
         "--no-restore",
         "--nologo",
-        "--filter", "TestCategory=$TestCategory",
+        "--filter", $testFilter,
         "--logger", "console;verbosity=normal"
     )
     if ($testResult.ExitCode -ne 0) {
@@ -172,7 +184,7 @@ try {
     }
     $discoveryMatch = [regex]::Match($testResult.Output, "NUnit3TestExecutor discovered (?<count>\d+) of")
     if (-not $discoveryMatch.Success -or [int]$discoveryMatch.Groups["count"].Value -lt 1) {
-        throw "No QMT trading E2E cases were discovered for category $TestCategory."
+        throw "No QMT trading E2E cases were discovered for filter $testFilter."
     }
     $discoveredTestCases = [int]$discoveryMatch.Groups["count"].Value
     $evidenceText = Get-Content -LiteralPath $userLogPath -Raw
@@ -181,8 +193,8 @@ try {
     if ($completedTestCases + $skippedTestCases -ne $discoveredTestCases) {
         throw "Expected evidence for $discoveredTestCases QMT trading E2E cases, found $completedTestCases completed and $skippedTestCases skipped."
     }
-    if ($RequireCompleted -and $completedTestCases -ne $discoveredTestCases) {
-        throw "Category $TestCategory requires all $discoveredTestCases cases to run; $skippedTestCases were skipped."
+    if ($selectedTestCaseName -and $completedTestCases -ne $discoveredTestCases) {
+        throw "Selected test case $selectedTestCaseName did not complete; $skippedTestCases were skipped."
     }
     Write-TradingEvidence "[qmt-trading-e2e] stage=$currentStage status=ok tests=$discoveredTestCases passed=$completedTestCases skipped=$skippedTestCases"
     Write-TradingEvidence "[qmt-trading-e2e] stage=run status=ok log=http://192.168.50.135:8000/e2e/$LogFileName"

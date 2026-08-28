@@ -60,6 +60,22 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         }
 
         [Test]
+        public void ChinaTradingCalendarIncludesExchangeHolidaysAndCoverageGuard()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(QmtMarket.IsTradingDay(new DateTime(2026, 8, 13)), Is.True);
+                Assert.That(QmtMarket.IsTradingDay(new DateTime(2026, 2, 16)), Is.False);
+                Assert.That(QmtMarket.IsTradingDay(new DateTime(2026, 10, 1)), Is.False);
+                Assert.That(QmtMarket.IsTradingDay(new DateTime(2026, 8, 15)), Is.False);
+                Assert.That(QmtMarket.CalendarCoverageStart, Is.EqualTo(new DateTime(2000, 1, 1)));
+                Assert.That(QmtMarket.CalendarCoverageEnd, Is.EqualTo(new DateTime(2026, 12, 31)));
+                Assert.Throws<InvalidOperationException>(() =>
+                    QmtMarket.EnsureCalendarCovers(new DateTime(2027, 1, 1)));
+            });
+        }
+
+        [Test]
         public void AddEquityUsesChinaMarketHoursAndProperties()
         {
             var repositoryDirectory = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", ".."));
@@ -102,8 +118,10 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Assert.IsTrue(security.Exchange.Hours.IsOpen(new DateTime(2026, 8, 13, 10, 0, 0), false));
             Assert.IsFalse(security.Exchange.Hours.IsOpen(new DateTime(2026, 8, 13, 12, 0, 0), false));
             Assert.IsTrue(security.Exchange.Hours.IsOpen(new DateTime(2026, 8, 13, 14, 0, 0), false));
+            Assert.IsFalse(security.Exchange.Hours.IsOpen(new DateTime(2026, 10, 1, 10, 0, 0), false));
             Assert.AreEqual("CNY", security.SymbolProperties.QuoteCurrency);
             Assert.AreEqual(0.01m, security.SymbolProperties.MinimumPriceVariation);
+            Assert.AreEqual(100m, security.SymbolProperties.LotSize);
         }
 
         private sealed class EmptyMapFileProvider : IMapFileProvider

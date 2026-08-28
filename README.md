@@ -15,7 +15,8 @@ The Mac and Windows LEAN checkouts are fixed to commit
 
 ## MVP status
 
-Implemented and validated by contract tests and real-QMT read-only E2E:
+Implemented and validated by contract tests plus real-QMT read-only and trading
+E2E against account `86033767`'s simulation counter:
 
 - NDJSON-over-TCP protocol v1 with account-checked `hello`, request IDs,
   timeouts, errors, events, and duplicate-request caching;
@@ -30,9 +31,9 @@ Implemented and validated by contract tests and real-QMT read-only E2E:
 
 Not yet production-ready:
 
-- no simulated-account end-to-end run against a real QMT process;
-- no automatic reconnect, resubscription, startup reconciliation, or event
-  deduplication after reconnect;
+- no production-counter end-to-end trading run;
+- reconnect restores account snapshots and active subscriptions, but there is no
+  missed order/deal replay or event deduplication after reconnect;
 - no full trading-day soak, network interruption, or restart test;
 - no final field validation from captured real QMT query/callback logs.
 
@@ -48,21 +49,48 @@ QMT is the Brokerage name, not the LEAN market ID. Add China equities with:
 self.add_equity("600000", Resolution.MINUTE, market="china")
 ```
 
-The plugin registers the `china` market ID, Shanghai time zone, weekday
-09:30–11:30/13:00–15:00 sessions, CNY quote currency, and a 0.01 price step.
-The China holiday calendar is still a production-readiness item.
+`QmtMarket` owns the `china` market ID (`900`), Shanghai time zone,
+09:30–11:30/13:00–15:00 sessions, CNY quote/account currency, 0.01 price step,
+and 100-share default lot. Its embedded, versioned SH trading calendar currently
+covers `2000-01-01` through `2026-12-31`; Shanghai, Shenzhen, and Beijing share
+that national holiday set. Registration, Mac packaging, and Windows build/package
+fail when today's Shanghai date is outside the declared coverage instead of
+falling back to weekdays. Regenerate and review the resource with:
 
-The Gateway handshake identifies whether the connected QMT terminal is the
-simulation runtime, so no environment or market-order-style configuration is
-required. Strategy calls remain ordinary LEAN `MarketOrder` calls.
+```bash
+python3 scripts/generate_china_trading_calendar.py --end 2027-12-31
+python3 scripts/generate_china_trading_calendar.py --check
+```
 
-Simulation accounts automatically use `latest-price`, which maps to QMT price
-type `5` and is not an exchange-native market order. Live accounts automatically
-use `five-level-immediate-or-cancel`, mapped to `42` on Shanghai/Beijing and `47`
-on Shenzhen. A simulation account rejects orders outside its weekday 10:00–17:00
-session before calling QMT because `passorder` otherwise drops them without an
-order or rejection callback. QMT documents native stock market price types `42`
-through `48` as unavailable in simulation trading.
+The generator prefers QMT `xtdata.get_trading_calendar("SH", ...)`; if `xtquant`
+is unavailable it records the explicit `exchange-calendars` version in the
+resource so the fallback is visible in review.
+
+`QmtBrokerage.AccountBaseCurrency` is CNY in live mode. `QmtBrokerageModel`
+implements LEAN's optional account-currency provider, so selecting that model in
+a backtest changes the account currency to CNY before securities or cash are
+added. A conflicting earlier `SetAccountCurrency` call fails initialization.
+
+Transport loss starts one cancellable reconnect loop. Attempts wait
+`1, 2, 5, 10, 20, 30, 60` seconds and then remain at 60 seconds without jitter.
+An attempt is complete only after the Gateway handshake, account/position/order
+queries, order reconciliation, and active subscription restoration succeed.
+Only then does the Brokerage publish one `RECONNECT`; explicit disconnect and
+disposal cancel the loop.
+
+The Gateway handshake identifies whether the connected QMT terminal uses the
+simulation counter. This controls the weekday 10:00–17:00 submission guard, but
+it does not select the market-order style. Every LEAN market order must explicitly
+provide `QmtOrderProperties.MarketOrderStyle`.
+
+`latest-price` maps to QMT price type `5` and is not an exchange-native market
+order. `five-level-immediate-or-cancel` maps to `42` on Shanghai/Beijing and `47`
+on Shenzhen. Although the QMT documentation says native stock market price types
+`42` through `48` are unavailable in simulation trading, the current simulation
+counter accepted Shanghai type `42` and filled it in the real E2E. The QMT model
+strategy itself must be started in the UI with running mode `实盘`; UI mode `模拟`
+drops order signals before they reach the counter, even when the selected account
+is a simulation account.
 
 ## Python 策略类型存根
 
@@ -90,8 +118,8 @@ order_properties.market_order_style = QmtMarketOrderStyle.LATEST_PRICE
 self.market_order(symbol, 100, order_properties=order_properties)
 ```
 
-市场单样式是可选项。未指定时，Brokerage 会为模拟账户选择
-`latest-price`，为实盘账户选择 `five-level-immediate-or-cancel`。
+市场单样式是必填项；未指定时 Brokerage 会拒绝该市场单。当前真实 QMT 模拟柜台
+已经验证上海 `five-level-immediate-or-cancel`（价格类型 `42`）可以成交。
 
 ## Repository layout
 
@@ -189,7 +217,6 @@ make test
 make test-readonly
 make test-smoke
 make test-trading
-make test-trading-inventory
 ```
 
 `make test-readonly` runs the real Brokerage NUnit test, which checks the
@@ -199,8 +226,9 @@ subscription lifecycle, and an explicit disconnect/connect cycle.
 runs the complete
 `lean-cli -> Docker -> LEAN Engine -> QMT` path. Both require trading to be
 disabled, and neither calls an order method. During closed market hours the live
-tick stage is reported as skipped, not passed. Neither test claims automatic
-fault recovery.
+tick stage is reported as skipped, not passed. These two real-Gateway tests do
+not inject a transport failure; timed automatic recovery is covered by contract
+tests.
 The latest concise Brokerage evidence is served from Windows at:
 
 ```text
@@ -218,13 +246,14 @@ http://192.168.50.135:8000/e2e/
 ```
 
 The physical log directories live under `C:\Users\nemo\lean_logs`. Project
-`live` paths are symbolic links into that root, and the Gateway writes directly
-to `lean_logs\broker\qmt-gateway-runtime.log`. The Python Gateway rotates that
-file at 5 MiB and keeps three backups. Build and deployment test logs remain
-private under the repository `.test-logs`. Windows serves its own logs directly;
-they are not copied to macOS. Native Windows Nginx serves only the unified root
-directory on port 8000 and runs as the `QmtLiveLogs` startup task. Log access is
-independent of Docker Desktop, WSL, and LEAN containers.
+`live` paths are symbolic links into that root, and the Gateway writes one daily
+file such as `lean_logs\broker\qmt-gateway-runtime-2026-08-24.log`. Each daily
+file rotates at 5 MiB with three backups, and the Gateway retains 14 calendar
+days. Build and deployment test logs remain private under the repository
+`.test-logs`. Windows serves its own logs directly; they are not copied to
+macOS. Native Windows Nginx serves only the unified root directory on port 8000
+and runs as the `QmtLiveLogs` startup task. Log access is independent of Docker
+Desktop, WSL, and LEAN containers.
 
 ## Download QMT minute history
 
@@ -297,6 +326,17 @@ The explicit order/cancel test against the current QMT Gateway account is:
 make test-trading
 ```
 
+Pass `TEST_CASE` to run one NUnit trading method by name:
+
+```bash
+make test-trading TEST_CASE=RejectsSecondCancellation
+make test-trading TEST_CASE=MarketBuyIncreasesHoldingAndSameDaySellIsRejected
+```
+
+Without `TEST_CASE`, the command runs the repeatable trading category. A named
+case is required to complete; unknown names and skipped named cases fail without
+falling back to the full category.
+
 The repeatable category is fixed to `600000.SH` and `100` shares. It requires
 the Gateway handshake account to match `lean-qmt.json`, and selects cases for
 the QMT simulation session (`10:00-17:00` Asia/Shanghai). During the session it
@@ -307,17 +347,21 @@ run with the normal unit/contract suite instead of connecting to QMT. Cleanup
 does not pass until a remaining order reaches `Canceled` and disappears from
 the open-order query.
 
-The stateful market-buy case has a separate, explicit command:
+The stateful T+1 case is selected explicitly from the same command:
 
 ```bash
-make test-trading-inventory
+make test-trading TEST_CASE=MarketBuyIncreasesHoldingAndSameDaySellIsRejected
 ```
 
-It runs only during the simulation session, buys 100 shares, and verifies the
-fill plus the exact 100-share holding increase. Each invocation intentionally
-adds 100 T+0 shares. Concise Windows logs are:
+It runs one stateful case during the simulation session. The case records total
+and available position quantities, buys 100 shares, verifies the fill and exact
+100-share holding increase without an available-quantity increase, then attempts
+to sell the available quantity plus those 100 new shares. It passes only if QMT
+reports the sell as `Invalid`, fills zero shares, leaves both position quantities
+unchanged, returns no open sell order, and gives the native rejection reason
+`证券可用数量不足`. Each invocation intentionally adds 100 T+0 shares. Concise
+Windows logs are:
 
 ```text
 http://192.168.50.135:8000/e2e/test-trading.log
-http://192.168.50.135:8000/e2e/test-trading-inventory.log
 ```

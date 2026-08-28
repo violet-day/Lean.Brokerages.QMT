@@ -3,6 +3,7 @@ using NUnit.Framework;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
 using QuantConnect.Orders;
+using QuantConnect.Orders.Fees;
 using QuantConnect.Securities;
 
 namespace QuantConnect.Brokerages.Qmt.Tests
@@ -72,6 +73,31 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Assert.AreEqual(AccountType.Cash, model.AccountType);
             Assert.AreEqual(QmtSymbolMapper.MarketName, model.DefaultMarkets[SecurityType.Equity]);
             Assert.AreEqual(1m, model.GetLeverage(security));
+        }
+
+        [Test]
+        public void UsesZeroCnyFeeForChinaEquity()
+        {
+            var symbol = _symbolMapper.GetLeanSymbol("600000.SH", SecurityType.Equity, QmtSymbolMapper.MarketName);
+            var security = CreateSecurity(symbol);
+            var order = new MarketOrder(symbol, 100, DateTime.UtcNow);
+
+            var fee = new QmtBrokerageModel()
+                .GetFeeModel(security)
+                .GetOrderFee(new OrderFeeParameters(security, order))
+                .Value;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(fee.Amount, Is.Zero);
+                Assert.That(fee.Currency, Is.EqualTo(QmtMarket.AccountCurrency));
+            });
+        }
+
+        [Test]
+        public void UsesCnyAccountCurrency()
+        {
+            Assert.That(new QmtBrokerageModel().AccountCurrency, Is.EqualTo(QmtMarket.AccountCurrency));
         }
 
         [Test]

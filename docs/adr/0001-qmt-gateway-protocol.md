@@ -180,13 +180,13 @@ The Python socket thread parses requests and puts them on an inbound queue. QMT 
 
 The C# client has one reader loop and one serialized writer. A concurrent map routes responses by request ID. Each request has a timeout. Socket failure completes all pending requests exceptionally, marks the client disconnected, and emits one disconnected notification. Malformed individual JSON lines are logged and skipped; EOF or a transport exception ends the connection.
 
-Connection loss is reported to the owning Brokerage. The current MVP does not automatically reconnect; recovery is operator-driven. Any future reconnect implementation must repeat `hello`, reconcile account state, and restore active subscriptions before reporting success.
+Connection loss is reported to the owning Brokerage, which starts one cancellable reconnect loop. Attempts wait `1, 2, 5, 10, 20, 30, 60` seconds and then remain capped at 60 seconds, with no jitter. Duplicate disconnect callbacks neither start a second loop nor reset the attempt number. Each successful transport connection repeats `hello`, queries account, position, and order snapshots, reconciles known orders, restores active subscriptions, and only then resets the backoff and emits the single LEAN reconnect message. A failure at any stage advances the backoff. Explicit disconnect and disposal cancel the loop.
 
 ## Security
 
 This MVP protocol has no encryption or authentication and must only bind to a trusted interface. Do not expose port `17890` to the public Internet. Container-to-host use is restricted by Windows firewall rules. A future protocol version may add a shared-secret handshake or TLS if the deployment crosses a trusted-host boundary.
 
-Logs include operation, request ID, connection stage, account ID, and error code. Logs must never include passwords, bearer tokens, or full order payloads.
+Logs include operation, request ID, connection stage, account ID, and error code. Reconnect logs additionally include attempt number, delay, outage duration, failed recovery stage, and the absolute next-attempt UTC time. Logs must never include passwords, bearer tokens, or full order payloads.
 
 ## Consequences
 

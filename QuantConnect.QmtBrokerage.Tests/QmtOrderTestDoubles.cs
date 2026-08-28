@@ -30,6 +30,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
         public bool IsConnected { get; private set; } = true;
         public QmtPlaceOrderRequest? PlaceOrderRequest { get; private set; }
+        public QmtCancelOrderRequest? CancelOrderRequest { get; private set; }
         public QmtHelloPayload? ServerInformation { get; private set; }
 
         public event EventHandler<QmtGatewayMessageEventArgs>? EventReceived;
@@ -95,6 +96,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
             if (operation == QmtProtocol.Operations.CancelOrder)
             {
+                CancelOrderRequest = (QmtCancelOrderRequest?)payload;
                 return Task.FromResult(new QmtProtocolMessage
                 {
                     MessageType = QmtProtocol.MessageTypes.Response,
