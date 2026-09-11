@@ -1,6 +1,5 @@
 param(
     [string]$RepositoryPath = "C:\Users\nemo\lean\Lean.Brokerages.QMT",
-    [string]$LeanConfigurationPath = "C:\Users\nemo\lean_project\lean-qmt.json",
     [string]$LogRootPath = "C:\Users\nemo\lean_logs",
     [string]$EngineImage = "quantconnect/lean:latest",
     [string]$ModuleRoot = "$env:USERPROFILE\.lean\modules\QmtBrokerage",
@@ -77,19 +76,45 @@ $currentStage = "preflight"
 Write-E2EEvidence "[qmt-e2e] stage=run status=start operations=readonly"
 try {
     Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start"
-    if (-not (Test-Path -LiteralPath $LeanConfigurationPath)) {
-        throw "The QMT LEAN configuration is missing: $LeanConfigurationPath"
-    }
-    $configuration = Get-Content -LiteralPath $LeanConfigurationPath -Raw | ConvertFrom-Json
-    $accountId = [string]$configuration."qmt-account-id"
-    if (-not $accountId) {
-        throw "qmt-account-id is missing from $LeanConfigurationPath"
-    }
     $gatewayListener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction SilentlyContinue
     if (-not $gatewayListener) {
         throw "The real QMT Gateway is not listening on Windows port $GatewayPort."
     }
     Write-E2EEvidence "[qmt-e2e] stage=preflight status=ok gateway_port=$GatewayPort operations=readonly"
+
+    $currentStage = "account-query"
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=start source=query_account"
+    $pythonExecutable = Join-Path $RepositoryPath ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $pythonExecutable)) {
+        throw "The QMT test Python environment is missing: $pythonExecutable"
+    }
+    $accountProbeSource = @'
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from scripts.download_qmt_history import QmtGatewayApiClient
+
+with QmtGatewayApiClient("127.0.0.1", int(sys.argv[2]), 10) as gateway_client:
+    gateway_client.request("hello", {"account_id": ""})
+    print(json.dumps(gateway_client.request("query_account")))
+'@
+    $accountProbeOutput = $accountProbeSource |
+        & $pythonExecutable - $RepositoryPath $GatewayPort
+    if ($LASTEXITCODE -ne 0) {
+        throw "The real QMT query_account preflight failed."
+    }
+    $accountPayload = ($accountProbeOutput -join "`n") | ConvertFrom-Json
+    $accountId = [string]$accountPayload.account_id
+    $accountSnapshots = @($accountPayload.accounts)
+    if (-not $accountId) {
+        throw "The real QMT query_account response has no account_id."
+    }
+    if ($accountSnapshots.Count -lt 1 -or
+        $null -eq $accountSnapshots[0].available_cash) {
+        throw "The real QMT query_account response has no usable cash snapshot."
+    }
+    Write-E2EEvidence "[qmt-e2e] stage=$currentStage status=ok account_id=$accountId accounts=$($accountSnapshots.Count)"
 
     $currentStage = "build-cache"
     Write-CurrentTask "csharp-build"

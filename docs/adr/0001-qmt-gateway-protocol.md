@@ -61,8 +61,12 @@ The Gateway never starts, stops, logs into, or restarts QMT. An operator starts 
 `query_account` response:
 
 ```json
-{"accounts":[{"available_cash":100000.00}]}
+{"account_id":"67045678","accounts":[{"available_cash":100000.00}]}
 ```
+
+The real read-only E2E requires `query_account` to succeed before any
+account-scoped test. It takes `account_id` from this response and uses that
+verified value for the remaining Brokerage tests.
 
 `query_positions` response:
 
@@ -75,6 +79,11 @@ The Gateway never starts, stops, logs into, or restarts QMT. An operator starts 
 ```json
 {"orders":[{"stock_code":"600000.SH","order_id":"123","client_order_id":"42","direction":"buy","order_type":"limit","status":50,"original_volume":100,"traded_volume":0,"limit_price":10.00,"traded_price":0,"remark":""}]}
 ```
+
+`query_orders` always calls QMT's
+`get_trade_detail_data(account_id, "STOCK", "ORDER", strategy_name)` directly.
+The Gateway does not persist or reconstruct historical orders. Strategies that
+need today's trading activity query this operation when making their decision.
 
 `direction` is `buy` or `sell`; `order_type` is `market` or `limit`. Decimal financial values are JSON numbers. Native identifiers are strings because QMT/runtime builds may expose different numeric widths.
 

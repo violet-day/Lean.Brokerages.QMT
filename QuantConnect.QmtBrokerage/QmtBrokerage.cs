@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
@@ -24,6 +25,8 @@ namespace QuantConnect.Brokerages.Qmt
     [BrokerageFactory(typeof(QmtBrokerageFactory))]
     public sealed class QmtBrokerage : Brokerage, IDataQueueHandler
     {
+        private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
+
         private static readonly TimeSpan[] DefaultReconnectDelays =
         {
             TimeSpan.FromSeconds(1),
@@ -57,6 +60,8 @@ namespace QuantConnect.Brokerages.Qmt
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<int, decimal> _filledQuantityByLeanOrderId =
             new ConcurrentDictionary<int, decimal>();
+        private readonly ConcurrentDictionary<string, byte> _publishedSubmittedOrderEventSignatures =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>> _pendingDealsByNativeOrderId =
             new ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>>(StringComparer.Ordinal);
         private readonly object _pendingDealsLock = new object();
@@ -659,7 +664,8 @@ namespace QuantConnect.Brokerages.Qmt
                 QmtSymbolMapper.MarketName);
             var direction = leanOrder?.Direction ?? ParseDirection(orderUpdate.Direction);
             var status = QmtOrderStatusMapper.GetLeanOrderStatus(orderUpdate.Status);
-            var orderMessage = GetOrderEventMessage(orderUpdate);
+            var orderErrorMessage = GetOrderEventErrorMessage(orderUpdate);
+            var orderMessage = GetOrderEventMessage(orderUpdate, orderErrorMessage);
             if (status == OrderStatus.None && orderUpdate.SubmitStatus == 52)
             {
                 status = OrderStatus.Invalid;
@@ -686,7 +692,7 @@ namespace QuantConnect.Brokerages.Qmt
                 OnMessage(new BrokerageMessageEvent(
                     BrokerageMessageType.Warning,
                     orderUpdate.SubmitStatus == 53 ? "CancelRejected" : "UpdateRejected",
-                    $"QMT rejected the {requestName} for LEAN order {leanOrderId.Value}: {orderMessage}"));
+                    $"QMT rejected the {requestName} for LEAN order {leanOrderId.Value}: {orderErrorMessage}"));
             }
 
             if (status == OrderStatus.PartiallyFilled || status == OrderStatus.Filled)
@@ -694,7 +700,20 @@ namespace QuantConnect.Brokerages.Qmt
                 ProcessPendingDeals(orderUpdate.OrderId);
                 Log.Trace(
                     $"QmtBrokerage.HandleOrder(): status=deferred_to_deal lean_order_id={leanOrderId.Value} " +
-                    $"native_order_id={orderUpdate.OrderId} order_status={status}");
+                    $"native_order_id={orderUpdate.OrderId} order_status={status} " +
+                    $"qmt_order_status={orderUpdate.Status} qmt_submit_status={orderUpdate.SubmitStatus}");
+                return;
+            }
+            var submittedOrderEventSignature = $"{leanOrderId.Value}:{orderMessage}";
+            if (status == OrderStatus.Submitted &&
+                !_publishedSubmittedOrderEventSignatures.TryAdd(submittedOrderEventSignature, 0))
+            {
+                Log.Trace(
+                    $"QmtBrokerage.HandleOrder(): status=duplicate_native_submitted_ignored " +
+                    $"lean_order_id={leanOrderId.Value} " +
+                    $"native_order_id={orderUpdate.OrderId} order_status={status} " +
+                    $"qmt_order_status={orderUpdate.Status} qmt_submit_status={orderUpdate.SubmitStatus}");
+                ProcessPendingDeals(orderUpdate.OrderId);
                 return;
             }
             OnOrderEvent(new OrderEvent(
@@ -709,7 +728,8 @@ namespace QuantConnect.Brokerages.Qmt
                 orderMessage));
             Log.Trace(
                 $"QmtBrokerage.HandleOrder(): status=ok lean_order_id={leanOrderId.Value} " +
-                $"native_order_id={orderUpdate.OrderId} order_status={status}");
+                $"native_order_id={orderUpdate.OrderId} order_status={status} " +
+                $"qmt_order_status={orderUpdate.Status} qmt_submit_status={orderUpdate.SubmitStatus}");
             ProcessPendingDeals(orderUpdate.OrderId);
         }
 
@@ -855,7 +875,7 @@ namespace QuantConnect.Brokerages.Qmt
                 : OrderDirection.Buy;
         }
 
-        private static string GetOrderEventMessage(QmtOrderEventPayload orderUpdate)
+        private static string GetOrderEventErrorMessage(QmtOrderEventPayload orderUpdate)
         {
             var rawMessages = new List<string>();
             if (!string.IsNullOrWhiteSpace(orderUpdate.ErrorMessage))
@@ -870,15 +890,26 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 rawMessages.Add($"cancel_information={orderUpdate.CancelInformation.Trim()}");
             }
-            if (rawMessages.Count == 0)
-            {
-                return orderUpdate.Remark;
-            }
-
             var statusInformation = string.Join("; ", rawMessages);
-            return orderUpdate.ErrorId == 0
-                ? statusInformation
-                : $"QMT error {orderUpdate.ErrorId}: {statusInformation}";
+            return string.IsNullOrWhiteSpace(statusInformation)
+                ? string.Empty
+                : orderUpdate.ErrorId == 0
+                    ? statusInformation
+                    : $"QMT error {orderUpdate.ErrorId}: {statusInformation}";
+        }
+
+        private static string GetOrderEventMessage(
+            QmtOrderEventPayload orderUpdate,
+            string errorMessage)
+        {
+            var eventMetadata = new
+            {
+                qmt_order_status = orderUpdate.Status,
+                qmt_submit_status = orderUpdate.SubmitStatus,
+                native_order_id = orderUpdate.OrderId,
+                error_message = errorMessage
+            };
+            return QmtOrderEventMessagePrefix + JsonConvert.SerializeObject(eventMetadata);
         }
 
         private static DateTime ParseQmtTime(string value)

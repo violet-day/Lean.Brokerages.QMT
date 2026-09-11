@@ -24,7 +24,7 @@ install-python-stubs:
 test: calendar
 	@echo '[qmt-task] $(call task_path,test)'
 	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build-if-changed -> Windows NUnit tests -> package DLL"'
-	@QMT_TASK_PATH='$(call task_path,test)' ./scripts/sync_worktree_to_windows.sh --test
+	@QMT_TASK_PATH='$(call task_path,test)' ./scripts/sync_worktree_to_windows.sh --test $(qmt_push_option)
 	@echo '[qmt-test] host=mac stage=all status=ok'
 
 sync-windows: calendar

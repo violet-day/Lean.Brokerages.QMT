@@ -20,15 +20,18 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
         public QmtGatewayClient GatewayClient { get; }
         public QmtBrokerage Brokerage { get; }
         public Symbol Symbol { get; }
+        public string AccountId { get; }
 
         private QmtReadOnlyTestContext(
             QmtGatewayClient gatewayClient,
             QmtBrokerage brokerage,
-            Symbol symbol)
+            Symbol symbol,
+            string accountId)
         {
             GatewayClient = gatewayClient;
             Brokerage = brokerage;
             Symbol = symbol;
+            AccountId = accountId;
         }
 
         public static QmtReadOnlyTestContext Connect()
@@ -66,14 +69,26 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.Infrastructure
                     StockCode,
                     SecurityType.Equity,
                     QmtSymbolMapper.MarketName);
-                context = new QmtReadOnlyTestContext(gatewayClient, brokerage, symbol);
+                context = new QmtReadOnlyTestContext(
+                    gatewayClient,
+                    brokerage,
+                    symbol,
+                    accountId);
                 brokerage.Connect();
 
                 Assert.That(brokerage.IsConnected, Is.True);
                 Assert.That(gatewayClient.ServerInformation?.AccountId, Is.EqualTo(accountId));
+                var accountPayload = gatewayClient
+                    .SendRequestAsync(QmtProtocol.Operations.QueryAccount)
+                    .GetAwaiter()
+                    .GetResult()
+                    .ToPayload<QmtQueryAccountPayload>();
+                Assert.That(accountPayload.AccountId, Is.EqualTo(accountId));
+                Assert.That(accountPayload.Accounts, Is.Not.Empty);
                 WriteEvidence(
                     stage,
                     "ok",
+                    $"account_query=true account_id={accountPayload.AccountId} " +
                     $"account_match=true is_simulation=" +
                     brokerage.AccountProperties.IsSimulation.ToString().ToLowerInvariant());
                 return context;

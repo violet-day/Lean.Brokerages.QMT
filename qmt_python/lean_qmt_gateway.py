@@ -40,11 +40,6 @@ RUNTIME_LOG_PATH = os.environ.get(
 MAXIMUM_RUNTIME_LOG_BYTES = 5 * 1024 * 1024
 RUNTIME_LOG_BACKUP_COUNT = 3
 RUNTIME_LOG_RETENTION_DAYS = 14
-HISTORICAL_ORDER_ARCHIVE_RETENTION_DAYS = 400
-HISTORICAL_ORDER_ARCHIVE_DIRECTORY = os.environ.get(
-    "QMT_HISTORICAL_ORDER_ARCHIVE_DIRECTORY",
-    os.path.join(os.path.dirname(RUNTIME_LOG_PATH), "qmt-order-history"),
-)
 MAXIMUM_MESSAGE_BYTES = 1024 * 1024
 MAXIMUM_REQUESTS_PER_HANDLEBAR = 100
 MAXIMUM_CACHED_RESPONSES = 512
@@ -88,7 +83,6 @@ MARKET_ORDER_SUBMISSIONS = {
     },
 }
 _runtime_log_lock = threading.Lock()
-_historical_order_archive_lock = threading.Lock()
 _last_runtime_log_cleanup_date = ""
 
 
@@ -215,147 +209,6 @@ def _log(message, **fields):
     except Exception:
         pass
     print(log_line)
-
-
-def _historical_order_archive_path(order_date):
-    return os.path.join(
-        HISTORICAL_ORDER_ARCHIVE_DIRECTORY,
-        "qmt-orders-%s.json" % order_date,
-    )
-
-
-def _order_date(order):
-    timestamp = str(order.get("time") or "").strip()
-    compact_date = timestamp[:8]
-    try:
-        time.strptime(compact_date, "%Y%m%d")
-    except (TypeError, ValueError):
-        return ""
-    return compact_date
-
-
-def _order_archive_key(order):
-    order_id = str(order.get("order_id") or "").strip()
-    if order_id:
-        return "order:%s" % order_id
-    return "submission:%s:%s:%s" % (
-        str(order.get("stock_code") or ""),
-        str(order.get("client_order_id") or ""),
-        str(order.get("time") or ""),
-    )
-
-
-def _read_historical_order_archive(order_date):
-    archive_path = _historical_order_archive_path(order_date)
-    if not os.path.isfile(archive_path):
-        return None
-    with open(archive_path, "rb") as archive_file:
-        archive_payload = json.loads(archive_file.read().decode("utf-8"))
-    if str(archive_payload.get("account_id") or "") == "":
-        raise ValueError("Historical order archive has no account ID.")
-    orders = archive_payload.get("orders")
-    if not isinstance(orders, list):
-        raise ValueError("Historical order archive has no orders list.")
-    return archive_payload
-
-
-def _write_historical_order_archive(account_id, order_date, orders):
-    if not os.path.isdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
-        os.makedirs(HISTORICAL_ORDER_ARCHIVE_DIRECTORY)
-    archive_path = _historical_order_archive_path(order_date)
-    temporary_archive_path = "%s.tmp" % archive_path
-    archive_payload = {
-        "account_id": str(account_id),
-        "archive_date": order_date,
-        "orders": sorted(
-            orders,
-            key=lambda order: (
-                str(order.get("time") or ""),
-                str(order.get("order_id") or ""),
-            ),
-        ),
-    }
-    encoded_payload = json.dumps(
-        archive_payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    with open(temporary_archive_path, "wb") as archive_file:
-        archive_file.write(encoded_payload)
-    os.replace(temporary_archive_path, archive_path)
-
-
-def _archive_historical_orders(account_id, orders, empty_date=""):
-    orders_by_date = {}
-    for order in orders:
-        order_date = _order_date(order)
-        if order_date:
-            orders_by_date.setdefault(order_date, []).append(order)
-    if empty_date and empty_date not in orders_by_date:
-        orders_by_date[empty_date] = []
-
-    with _historical_order_archive_lock:
-        for order_date, dated_orders in orders_by_date.items():
-            existing_archive = _read_historical_order_archive(order_date)
-            if existing_archive is not None:
-                archived_account_id = str(existing_archive["account_id"])
-                if archived_account_id != str(account_id):
-                    raise ValueError(
-                        "Historical order archive account does not match Gateway account."
-                    )
-                merged_orders = {
-                    _order_archive_key(order): order
-                    for order in existing_archive["orders"]
-                }
-            else:
-                merged_orders = {}
-            for order in dated_orders:
-                order_key = _order_archive_key(order)
-                existing_order = merged_orders.get(order_key, {})
-                merged_order = dict(existing_order)
-                merged_order.update(order)
-                if not merged_order.get("strategy_name"):
-                    merged_order["strategy_name"] = existing_order.get(
-                        "strategy_name",
-                        "",
-                    )
-                merged_orders[order_key] = merged_order
-            _write_historical_order_archive(
-                account_id,
-                order_date,
-                list(merged_orders.values()),
-            )
-
-
-def _remove_expired_historical_order_archives(current_date):
-    if not os.path.isdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
-        return
-    oldest_retained_date = time.strftime(
-        "%Y%m%d",
-        time.localtime(
-            time.time()
-            - (HISTORICAL_ORDER_ARCHIVE_RETENTION_DAYS - 1) * 24 * 60 * 60
-        ),
-    )
-    for archive_filename in os.listdir(HISTORICAL_ORDER_ARCHIVE_DIRECTORY):
-        if not archive_filename.startswith("qmt-orders-") or not archive_filename.endswith(
-            ".json"
-        ):
-            continue
-        archive_date = archive_filename[len("qmt-orders-"):-len(".json")]
-        try:
-            time.strptime(archive_date, "%Y%m%d")
-        except ValueError:
-            continue
-        if archive_date >= oldest_retained_date:
-            continue
-        try:
-            os.remove(
-                os.path.join(HISTORICAL_ORDER_ARCHIVE_DIRECTORY, archive_filename)
-            )
-        except OSError:
-            pass
 
 
 _log(
@@ -491,8 +344,10 @@ def _direction(value):
         return "sell"
 
     direction_text = str(value or "").strip().lower()
-    if direction_text in ("buy", "sell"):
-        return direction_text
+    if direction_text in ("buy", u"\u4e70\u5165"):
+        return "buy"
+    if direction_text in ("sell", u"\u5356\u51fa"):
+        return "sell"
     return direction_text
 
 
@@ -513,7 +368,7 @@ def _native_stock_code(native_security_info):
     raw_stock_code = str(
         _attribute(
             native_security_info,
-            ("m_strInstrumentID", "stock_code"),
+            ("m_strInstrumentID", "m_strCode", "stock_code"),
             "",
         )
         or ""
@@ -1280,7 +1135,6 @@ class LeanQmtGateway(object):
         payload = self._enrich_order_with_submission(
             _normalize_order(order_info)
         )
-        _archive_historical_orders(self.account_id, [payload])
         self._publish_event("order", payload)
         _log(
             "order_event",
@@ -1315,7 +1169,6 @@ class LeanQmtGateway(object):
         callback_error_message = str(error_message or "").strip()
         if callback_error_message:
             payload["callback_error_message"] = callback_error_message
-        _archive_historical_orders(self.account_id, [payload])
         self._publish_event("order", payload)
         _log(
             "order_error_event",
@@ -1592,10 +1445,46 @@ class LeanQmtGateway(object):
                 "is_simulation": _is_simulation_runtime(),
             }
         if operation == "query_account":
+            account_rows = self._query_trade_detail("ACCOUNT")
+            if not account_rows:
+                _log(
+                    "account_query_unavailable",
+                    account_id=self.account_id,
+                    action="find_supported_account_asset_api",
+                )
+                raise _RequestError(
+                    "QMT_ACCOUNT_DATA_UNAVAILABLE",
+                    "QMT returned no account data; the real cash balance "
+                    "cannot be determined safely.",
+                )
+            returned_account_ids = set()
+            for account_row in account_rows:
+                returned_account_id = str(
+                    _attribute(
+                        account_row,
+                        ("m_strAccountID", "account_id", "accountid"),
+                        "",
+                    )
+                    or ""
+                ).strip()
+                if returned_account_id:
+                    returned_account_ids.add(returned_account_id)
+            returned_account_ids = sorted(returned_account_ids)
+            if returned_account_ids and returned_account_ids != [self.account_id]:
+                _log(
+                    "account_query_mismatch",
+                    configured_account_id=self.account_id,
+                    returned_account_ids=",".join(returned_account_ids),
+                )
+                raise _RequestError(
+                    "ACCOUNT_MISMATCH",
+                    "QMT account data does not match the Gateway account.",
+                )
             return {
+                "account_id": self.account_id,
                 "accounts": [
                     _normalize_account(account_info)
-                    for account_info in self._query_trade_detail("ACCOUNT")
+                    for account_info in account_rows
                 ]
             }
         if operation == "query_positions":
@@ -1606,20 +1495,22 @@ class LeanQmtGateway(object):
                 ]
             }
         if operation == "query_orders":
-            orders = [
-                self._enrich_order_with_submission(_normalize_order(order_info))
-                for order_info in self._query_trade_detail("ORDER")
-            ]
-            current_date = time.strftime("%Y%m%d")
-            _archive_historical_orders(
-                self.account_id,
-                orders,
-                empty_date=current_date,
-            )
-            _remove_expired_historical_order_archives(current_date)
-            return {"orders": orders}
-        if operation == "query_historical_orders":
-            return self._query_historical_orders(payload)
+            requested_account_id = str(
+                payload.get("account_id") or ""
+            ).strip()
+            if requested_account_id and requested_account_id != self.account_id:
+                raise _RequestError(
+                    "ACCOUNT_MISMATCH",
+                    "Gateway account does not match the requested account.",
+                )
+            return {
+                "orders": [
+                    self._enrich_order_with_submission(
+                        _normalize_order(order_info)
+                    )
+                    for order_info in self._query_trade_detail("ORDER")
+                ]
+            }
         if operation == "query_history":
             return self._query_history(payload)
         if operation == "place_order":
@@ -1634,140 +1525,6 @@ class LeanQmtGateway(object):
             "UNSUPPORTED_OPERATION",
             "Unsupported operation: %s" % operation,
         )
-
-    def _query_historical_orders(self, payload):
-        requested_account_id = str(payload.get("account_id") or "").strip()
-        if requested_account_id and requested_account_id != self.account_id:
-            raise _RequestError(
-                "ACCOUNT_MISMATCH",
-                "Gateway account does not match the requested account.",
-            )
-        start_date = str(payload.get("start_date") or "").strip()
-        end_date = str(payload.get("end_date") or "").strip()
-        for field_name, field_value in (
-            ("start_date", start_date),
-            ("end_date", end_date),
-        ):
-            try:
-                time.strptime(field_value, "%Y%m%d")
-            except (TypeError, ValueError):
-                raise _RequestError(
-                    "INVALID_REQUEST",
-                    "%s must use YYYYMMDD format." % field_name,
-                )
-        if start_date > end_date:
-            raise _RequestError(
-                "INVALID_REQUEST",
-                "start_date must be on or before end_date.",
-            )
-
-        history_query_function = getattr(
-            self.context_info,
-            "get_tradedatafromerds",
-            None,
-        )
-        started_at = time.time()
-        history_result = None
-        native_api_error = None
-        if callable(history_query_function):
-            try:
-                history_result = history_query_function(
-                    ACCOUNT_TYPE,
-                    self.account_id,
-                    start_date,
-                    end_date,
-                )
-            except AttributeError as error:
-                native_api_error = error
-        if native_api_error is not None:
-            underlying_context = getattr(self.context_info, "context", None)
-            _log(
-                "historical_orders_api_incompatible",
-                context_methods=[
-                    method_name
-                    for method_name in dir(self.context_info)
-                    if "order" in method_name.lower()
-                    or "trade" in method_name.lower()
-                    or "history" in method_name.lower()
-                ],
-                error=repr(native_api_error),
-                underlying_context_methods=[
-                    method_name
-                    for method_name in dir(underlying_context)
-                    if "order" in method_name.lower()
-                    or "trade" in method_name.lower()
-                    or "history" in method_name.lower()
-                ] if underlying_context is not None else [],
-            )
-        if history_result is not None:
-            history_rows = _rows(history_result)
-            _log(
-                "historical_orders_raw_sample",
-                end_date=end_date,
-                rows=len(history_rows),
-                sample=repr(history_rows[0])[:500] if history_rows else "",
-                start_date=start_date,
-            )
-            orders = [
-                self._enrich_order_with_submission(_normalize_order(history_row))
-                for history_row in history_rows
-            ]
-            _archive_historical_orders(self.account_id, orders)
-            source = "native"
-        else:
-            current_date = time.strftime("%Y%m%d")
-            if start_date <= current_date <= end_date:
-                current_orders = [
-                    self._enrich_order_with_submission(
-                        _normalize_order(order_info)
-                    )
-                    for order_info in self._query_trade_detail("ORDER")
-                ]
-                _archive_historical_orders(
-                    self.account_id,
-                    current_orders,
-                    empty_date=current_date,
-                )
-            orders = []
-            missing_dates = []
-            next_date_seconds = time.mktime(time.strptime(start_date, "%Y%m%d"))
-            end_date_seconds = time.mktime(time.strptime(end_date, "%Y%m%d"))
-            while next_date_seconds <= end_date_seconds:
-                archive_date = time.strftime(
-                    "%Y%m%d",
-                    time.localtime(next_date_seconds),
-                )
-                day_of_week = time.localtime(next_date_seconds).tm_wday
-                if day_of_week < 5:
-                    archive_payload = _read_historical_order_archive(archive_date)
-                    if archive_payload is None:
-                        missing_dates.append(archive_date)
-                    elif str(archive_payload["account_id"]) != self.account_id:
-                        raise _RequestError(
-                            "ACCOUNT_MISMATCH",
-                            "Historical order archive account does not match Gateway account.",
-                        )
-                    else:
-                        orders.extend(archive_payload["orders"])
-                next_date_seconds += 24 * 60 * 60
-            if missing_dates:
-                raise _RequestError(
-                    "HISTORICAL_ARCHIVE_INCOMPLETE",
-                    "Historical order archive is missing dates: %s."
-                    % ",".join(missing_dates),
-                )
-            source = "daily_archive"
-        orders.sort(key=lambda order: (order["time"], order["order_id"]))
-        _remove_expired_historical_order_archives(time.strftime("%Y%m%d"))
-        _log(
-            "historical_orders_query_ok",
-            elapsed_ms=int((time.time() - started_at) * 1000),
-            end_date=end_date,
-            orders=len(orders),
-            source=source,
-            start_date=start_date,
-        )
-        return {"orders": orders}
 
     def _query_history(self, payload):
         stock_code = str(payload.get("stock_code") or "").strip().upper()
@@ -2284,7 +2041,6 @@ def init(
         available=callable(get_market_data_function),
         download_available=callable(down_history_data_function),
     )
-
     _gateway = LeanQmtGateway(
         context_info=context_info,
         account_id=account_id,

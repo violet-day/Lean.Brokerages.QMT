@@ -15,12 +15,13 @@ The Mac and Windows LEAN checkouts are fixed to commit
 
 ## MVP status
 
-Implemented and validated by contract tests plus real-QMT read-only and trading
-E2E against account `86033767`'s simulation counter:
+Implemented features are covered by contract tests. The established account,
+market-data, and trading paths are also validated by real-QMT read-only and
+trading E2E against account `67045678`'s simulation counter:
 
 - NDJSON-over-TCP protocol v1 with account-checked `hello`, request IDs,
   timeouts, errors, events, and duplicate-request caching;
-- account cash, positions, and open-order queries;
+- account cash, positions, and direct current-order queries;
 - China A-share symbol conversion for `.SH`, `.SZ`, and `.BJ` codes;
 - Market and Limit orders, cancel, and an explicit unsupported result for
   order updates;
@@ -220,7 +221,8 @@ make test-trading
 ```
 
 `make test-readonly` runs the real Brokerage NUnit test, which checks the
-account handshake, cash, holdings, open orders, daily/minute history,
+account handshake, cash, holdings, open orders, direct current-day QMT order
+queries, daily/minute history,
 subscription lifecycle, and an explicit disconnect/connect cycle.
 `make test-smoke` first ensures the matching verified module is packaged, then
 runs the complete
@@ -305,7 +307,10 @@ and automatically reloads it after Git synchronization. It compiles the new
 source before stopping the current Gateway, does not register a second timer,
 and rolls back to the previous module if initialization fails. Updating an
 older installed entry to this hot-reload version requires one final manual
-strategy restart; later Gateway changes do not. This direct loader avoids
+strategy restart; later Gateway implementation changes do not. Synchronization
+updates the repository copy of the stable entry but cannot replace the source
+already pasted into QMT's model editor; entry changes therefore still require a
+manual copy and strategy restart. This direct loader avoids
 `importlib`, which is absent from QMT's trimmed Python 3.6 runtime.
 
 The default `127.0.0.1` binding is suitable for a LEAN process running directly

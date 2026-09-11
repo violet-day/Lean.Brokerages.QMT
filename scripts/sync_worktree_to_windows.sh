@@ -8,6 +8,8 @@ windows_workspace_directory='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace'
 windows_workspace_manifest_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace-files'
 windows_gateway_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py'
 windows_workspace_gateway_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace\qmt_python\lean_qmt_gateway.py'
+windows_gateway_entry_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\qmt_gateway_entry.py'
+windows_workspace_gateway_entry_source_path='C:\Users\nemo\lean\Lean.Brokerages.QMT-workspace\qmt_python\qmt_gateway_entry.py'
 windows_action='sync'
 push_repository=true
 parent_task_path="${QMT_TASK_PATH:-}"
@@ -77,6 +79,7 @@ calculate_package_input_fingerprint() {
                 QuantConnect.QmtBrokerage \
                 QuantConnect.QmtBrokerage.Tests \
                 qmt_python/lean_qmt_gateway.py \
+                qmt_python/qmt_gateway_entry.py \
                 scripts \
                 global.json
         )
@@ -138,11 +141,11 @@ else
     prepare_workspace_command="\$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Path '$windows_workspace_directory' -Force | Out-Null; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } elseif (Test-Path -LiteralPath '$windows_workspace_directory\.git') { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) } else { \$previousSnapshotFiles = @() }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=local-snapshot'"
 fi
 
-extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [Console]::In.ReadToEnd(); \$archivePath = [System.IO.Path]::GetTempFileName(); try { [System.IO.File]::WriteAllBytes(\$archivePath, [Convert]::FromBase64String(\$archiveBase64)); \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf \$archivePath -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } } finally { Remove-Item -LiteralPath \$archivePath -Force -ErrorAction SilentlyContinue }"
+extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [Console]::In.ReadToEnd(); \$archivePath = [System.IO.Path]::GetTempFileName(); try { [System.IO.File]::WriteAllBytes(\$archivePath, [Convert]::FromBase64String(\$archiveBase64)); \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf \$archivePath -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; Get-ChildItem -LiteralPath '$windows_workspace_directory' -Filter '._*' -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force } finally { Remove-Item -LiteralPath \$archivePath -Force -ErrorAction SilentlyContinue }"
 
 write_snapshot_manifest_command="\$ErrorActionPreference = 'Stop'; \$manifestBase64 = [Console]::In.ReadToEnd(); [System.IO.File]::WriteAllBytes('$windows_workspace_manifest_path', [Convert]::FromBase64String(\$manifestBase64)); '[qmt-test] host=windows stage=workspace-snapshot status=ok files=$snapshot_file_count changes=$snapshot_change_count path=$windows_workspace_directory'"
 
-deploy_gateway_source_command="\$ErrorActionPreference = 'Stop'; \$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_source_path').Hash; \$destinationHash = if (Test-Path -LiteralPath '$windows_gateway_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_source_path').Hash } else { '' }; if (\$sourceHash -ne \$destinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_source_path' -Destination '$windows_gateway_source_path' -Force; \$action = 'update' } else { \$action = 'none' }; \$gatewaySource = Get-Item -LiteralPath '$windows_gateway_source_path'; \"[qmt-test] host=windows stage=gateway-source status=ok action=\$action bytes=\$(\$gatewaySource.Length) sha256=\$sourceHash path=\$(\$gatewaySource.FullName)\""
+deploy_gateway_source_command="\$ErrorActionPreference = 'Stop'; \$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_source_path').Hash; \$destinationHash = if (Test-Path -LiteralPath '$windows_gateway_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_source_path').Hash } else { '' }; if (\$sourceHash -ne \$destinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_source_path' -Destination '$windows_gateway_source_path' -Force; \$action = 'update' } else { \$action = 'none' }; \$gatewaySource = Get-Item -LiteralPath '$windows_gateway_source_path'; \"[qmt-test] host=windows stage=gateway-source status=ok action=\$action bytes=\$(\$gatewaySource.Length) sha256=\$sourceHash path=\$(\$gatewaySource.FullName)\"; \$entrySourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_entry_source_path').Hash; \$entryDestinationHash = if (Test-Path -LiteralPath '$windows_gateway_entry_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_entry_source_path').Hash } else { '' }; if (\$entrySourceHash -ne \$entryDestinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_entry_source_path' -Destination '$windows_gateway_entry_source_path' -Force; \$entryAction = 'update' } else { \$entryAction = 'none' }; \$gatewayEntrySource = Get-Item -LiteralPath '$windows_gateway_entry_source_path'; \"[qmt-test] host=windows stage=gateway-entry-source status=ok action=\$entryAction bytes=\$(\$gatewayEntrySource.Length) sha256=\$entrySourceHash path=\$(\$gatewayEntrySource.FullName)\""
 
 run_windows_command="\$ErrorActionPreference = 'Stop'; if ('$windows_action' -eq 'test') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path'; exit \$LASTEXITCODE }; if ('$windows_action' -eq 'package') { & '$windows_workspace_directory\\scripts\\test_windows.ps1' -RepositoryPath '$windows_workspace_directory' -TaskPath '$test_task_path' -EnsurePackage; exit \$LASTEXITCODE }"
 
@@ -153,7 +156,7 @@ invoke_windows_powershell "$prepare_workspace_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$windows_test_log_path"
 list_snapshot_files \
-    | tar -C "$repository_directory" --null -T - -czf - \
+    | COPYFILE_DISABLE=1 tar -C "$repository_directory" --null -T - -czf - \
     | base64 \
     | invoke_windows_powershell "$extract_snapshot_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \

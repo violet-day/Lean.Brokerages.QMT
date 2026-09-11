@@ -69,6 +69,11 @@ http://192.168.50.135:8000/e2e/test-smoke.log
 
 该命令要求用户已在大 QMT 中手工运行真实 Gateway，随后执行：
 
+Gateway 策略必须在 QMT 的“实盘运行”模式启动，即使选择的是模拟资金账号。
+`get_trade_detail_data(..., "ACCOUNT")` 返回空列表不代表真实余额为零；
+在找到该版本 QMT 支持的真实资金查询接口前，Gateway 会拒绝账户查询，
+避免 LEAN 使用错误的零余额启动。
+
 ```text
 lean-cli
 → quantconnect/lean:latest

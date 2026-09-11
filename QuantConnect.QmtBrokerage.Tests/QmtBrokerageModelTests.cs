@@ -63,6 +63,43 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             Assert.AreEqual("UpdateNotSupported", updateMessage.Code);
         }
 
+        [TestCase("600000.SH", 99, false)]
+        [TestCase("600000.SH", 100, true)]
+        [TestCase("600000.SH", 101, true)]
+        [TestCase("688001.SH", 199, false)]
+        [TestCase("688001.SH", 200, true)]
+        [TestCase("688001.SH", 201, true)]
+        [TestCase("300001.SZ", 99, false)]
+        [TestCase("300001.SZ", 100, true)]
+        [TestCase("920037.BJ", 99, false)]
+        [TestCase("920037.BJ", 100, true)]
+        [TestCase("688001.SH", -1, true)]
+        public void EnforcesMinimumQuantityForBuyOrdersOnly(
+            string brokerageSymbol,
+            int orderQuantity,
+            bool expectedAccepted)
+        {
+            var symbol = _symbolMapper.GetLeanSymbol(
+                brokerageSymbol,
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            var security = CreateSecurity(symbol);
+            var order = new MarketOrder(symbol, orderQuantity, DateTime.UtcNow);
+
+            var accepted = new QmtBrokerageModel().CanSubmitOrder(security, order, out var message);
+
+            Assert.AreEqual(expectedAccepted, accepted);
+            if (expectedAccepted)
+            {
+                Assert.IsNull(message);
+            }
+            else
+            {
+                Assert.AreEqual("InvalidQuantity", message.Code);
+                Assert.That(message.Message, Does.Contain("minimum buy order quantity"));
+            }
+        }
+
         [Test]
         public void UsesCashAccountAndOneTimesLeverage()
         {

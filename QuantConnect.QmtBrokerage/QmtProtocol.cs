@@ -111,6 +111,9 @@ namespace QuantConnect.Brokerages.Qmt
 
     public sealed class QmtQueryAccountPayload
     {
+        [JsonProperty("account_id")]
+        public string AccountId { get; set; } = string.Empty;
+
         [JsonProperty("accounts")]
         public List<QmtAccountSnapshot> Accounts { get; set; } = new List<QmtAccountSnapshot>();
     }

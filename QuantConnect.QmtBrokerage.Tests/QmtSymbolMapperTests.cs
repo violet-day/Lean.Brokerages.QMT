@@ -16,10 +16,10 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     {
         private readonly QmtSymbolMapper _symbolMapper = new QmtSymbolMapper();
 
-        [TestCase("600000.SH")]
-        [TestCase("000001.SZ")]
-        [TestCase("430047.BJ")]
-        public void RoundTripsQmtEquitySymbols(string brokerageSymbol)
+        [TestCase("600000.SH", "600000")]
+        [TestCase("000001.SZ", "000001")]
+        [TestCase("430047.BJ", "430047")]
+        public void RoundTripsQmtEquitySymbols(string brokerageSymbol, string ticker)
         {
             var symbol = _symbolMapper.GetLeanSymbol(
                 brokerageSymbol,
@@ -28,7 +28,56 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
             Assert.AreEqual(SecurityType.Equity, symbol.SecurityType);
             Assert.AreEqual(QmtSymbolMapper.MarketName, symbol.ID.Market);
+            Assert.AreEqual(brokerageSymbol, symbol.Value);
+            Assert.AreEqual(ticker, symbol.ID.Symbol);
+            Assert.AreEqual(SecurityIdentifier.DefaultDate, symbol.ID.Date);
             Assert.AreEqual(brokerageSymbol, _symbolMapper.GetBrokerageSymbol(symbol));
+        }
+
+        [TestCase("600000", "SSE", "600000.SH")]
+        [TestCase("600000", "SH", "600000.SH")]
+        [TestCase("000001", "SZSE", "000001.SZ")]
+        [TestCase("000001", "SZ", "000001.SZ")]
+        [TestCase("430047", "BSE", "430047.BJ")]
+        [TestCase("430047", "BJ", "430047.BJ")]
+        public void CreatesCanonicalLeanSymbolFromScreenExchange(
+            string ticker,
+            string exchange,
+            string expectedBrokerageSymbol)
+        {
+            var symbol = _symbolMapper.GetLeanSymbolFromExchange(ticker, exchange);
+
+            Assert.AreEqual(SecurityType.Equity, symbol.SecurityType);
+            Assert.AreEqual(QmtSymbolMapper.MarketName, symbol.ID.Market);
+            Assert.AreEqual(expectedBrokerageSymbol, symbol.Value);
+            Assert.AreEqual(ticker, symbol.ID.Symbol);
+            Assert.AreEqual(SecurityIdentifier.DefaultDate, symbol.ID.Date);
+            Assert.AreEqual(expectedBrokerageSymbol, _symbolMapper.GetBrokerageSymbol(symbol));
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("60304")]
+        [TestCase("6030420")]
+        [TestCase("ABCDEF")]
+        public void RejectsInvalidScreenTicker(string? ticker)
+        {
+            var exception = Assert.Throws<ArgumentException>(() =>
+                _symbolMapper.GetLeanSymbolFromExchange(ticker!, "SSE"));
+
+            Assert.AreEqual("ticker", exception!.ParamName);
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase(" ")]
+        [TestCase("NYSE")]
+        public void RejectsMissingOrUnsupportedScreenExchange(string? exchange)
+        {
+            var exception = Assert.Throws<ArgumentException>(() =>
+                _symbolMapper.GetLeanSymbolFromExchange("603042", exchange!));
+
+            Assert.AreEqual("exchange", exception!.ParamName);
         }
 
         [TestCase("600000", "600000.SH")]

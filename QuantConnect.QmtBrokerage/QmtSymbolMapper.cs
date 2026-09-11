@@ -51,6 +51,32 @@ namespace QuantConnect.Brokerages.Qmt
             return new QmtSecurityCode(symbol.Value, exchange).ToString();
         }
 
+        /// <summary>
+        /// Creates a canonical LEAN symbol from an A-share ticker and exchange identifier.
+        /// </summary>
+        /// <param name="ticker">The six-digit A-share ticker.</param>
+        /// <param name="exchange">The exchange identifier: SSE/SH, SZSE/SZ, or BSE/BJ.</param>
+        public Symbol GetLeanSymbolFromExchange(string ticker, string exchange)
+        {
+            if (string.IsNullOrWhiteSpace(exchange))
+            {
+                throw new ArgumentException("An A-share exchange is required.", nameof(exchange));
+            }
+
+            var qmtExchange = exchange.ToUpperInvariant() switch
+            {
+                "SSE" or "SH" => QmtExchange.Shanghai,
+                "SZSE" or "SZ" => QmtExchange.Shenzhen,
+                "BSE" or "BJ" => QmtExchange.Beijing,
+                _ => throw new ArgumentException(
+                    "Unsupported A-share exchange. Use SSE/SH, SZSE/SZ, or BSE/BJ.",
+                    nameof(exchange))
+            };
+
+            var brokerageSymbol = new QmtSecurityCode(ticker, qmtExchange).ToString();
+            return GetLeanSymbol(brokerageSymbol, SecurityType.Equity, MarketName);
+        }
+
         public Symbol GetLeanSymbol(
             string brokerageSymbol,
             SecurityType securityType,

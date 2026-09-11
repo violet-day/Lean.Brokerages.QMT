@@ -74,6 +74,16 @@ namespace QuantConnect.Brokerages.Qmt
                 return false;
             }
 
+            var minimumBuyOrderQuantity = QmtEquityMarketRules.GetMinimumBuyOrderQuantity(security.Symbol);
+            if (order.Quantity > 0 && order.Quantity < minimumBuyOrderQuantity)
+            {
+                message = new BrokerageMessageEvent(
+                    BrokerageMessageType.Warning,
+                    "InvalidQuantity",
+                    $"QMT requires a minimum buy order quantity of {minimumBuyOrderQuantity} shares for {security.Symbol.Value}.");
+                return false;
+            }
+
             message = null;
             return true;
         }

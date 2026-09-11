@@ -11,8 +11,17 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 {
     internal sealed class QmtOrderTestProvider : IOrderProvider
     {
-        public int OrdersCount => 0;
-        public Order? GetOrderById(int orderId) => null;
+        private readonly IReadOnlyDictionary<int, Order> _ordersById;
+
+        public int OrdersCount => _ordersById.Count;
+
+        public QmtOrderTestProvider(params Order[] orders)
+        {
+            _ordersById = orders.ToDictionary(order => order.Id);
+        }
+
+        public Order? GetOrderById(int orderId) =>
+            _ordersById.TryGetValue(orderId, out var order) ? order : null;
         public List<Order> GetOrdersByBrokerageId(string brokerageId) => new();
         public IEnumerable<OrderTicket> GetOrderTickets(Func<OrderTicket, bool>? filter = null) =>
             Enumerable.Empty<OrderTicket>();

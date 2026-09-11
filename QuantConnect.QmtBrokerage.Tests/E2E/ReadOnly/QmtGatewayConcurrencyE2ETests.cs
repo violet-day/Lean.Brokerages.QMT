@@ -20,7 +20,9 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
                 var ordersRequestTask = Context.GatewayClient.SendRequestAsync(QmtProtocol.Operations.QueryOrders);
                 await Task.WhenAll(accountRequestTask, positionsRequestTask, ordersRequestTask);
 
-                Assert.That(accountRequestTask.Result.ToPayload<QmtQueryAccountPayload>().Accounts, Is.Not.Empty);
+                var accountPayload = accountRequestTask.Result.ToPayload<QmtQueryAccountPayload>();
+                Assert.That(accountPayload.AccountId, Is.EqualTo(Context.AccountId));
+                Assert.That(accountPayload.Accounts, Is.Not.Empty);
                 Assert.That(positionsRequestTask.Result.ToPayload<QmtQueryPositionsPayload>().Positions, Is.Not.Null);
                 Assert.That(ordersRequestTask.Result.ToPayload<QmtQueryOrdersPayload>().Orders, Is.Not.Null);
                 Context.WriteStage("concurrent-queries", "ok", "account=ok positions=ok orders=ok");

@@ -54,5 +54,6 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
                 Context.WriteStage("open-orders", "ok", $"open_orders={openOrders.Count} mapped=true");
             });
         }
+
     }
 }

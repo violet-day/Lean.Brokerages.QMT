@@ -62,6 +62,12 @@ def _injected_account_id():
 
 def _injected_function(function_name):
     function = globals().get(function_name)
+    if not callable(function):
+        builtin_namespace = globals().get("__builtins__")
+        if isinstance(builtin_namespace, dict):
+            function = builtin_namespace.get(function_name)
+        else:
+            function = getattr(builtin_namespace, function_name, None)
     if callable(function):
         return function
     return None
