@@ -23,6 +23,10 @@ namespace QuantConnect.Brokerages.Qmt
         private const int MarketIdentifier = 900;
         private static readonly object RegistrationLock = new object();
         private static readonly Lazy<TradingCalendar> Calendar = new Lazy<TradingCalendar>(LoadTradingCalendar);
+        private static readonly Lazy<SecurityExchangeHours> ExchangeHours =
+            new Lazy<SecurityExchangeHours>(CreateExchangeHours);
+        private static MarketHoursDatabase? _registeredMarketHoursDatabase;
+        private static SymbolPropertiesDatabase? _registeredSymbolPropertiesDatabase;
 
         public static DateTime CalendarCoverageStart => Calendar.Value.CoverageStart;
         public static DateTime CalendarCoverageEnd => Calendar.Value.CoverageEnd;
@@ -53,30 +57,20 @@ namespace QuantConnect.Brokerages.Qmt
 
             lock (RegistrationLock)
             {
-                var weekdays = new[]
+                var marketHoursDatabase = MarketHoursDatabase.FromDataFolder();
+                var symbolPropertiesDatabase = SymbolPropertiesDatabase.FromDataFolder();
+                if (ReferenceEquals(_registeredMarketHoursDatabase, marketHoursDatabase) &&
+                    ReferenceEquals(_registeredSymbolPropertiesDatabase, symbolPropertiesDatabase))
                 {
-                    DayOfWeek.Monday,
-                    DayOfWeek.Tuesday,
-                    DayOfWeek.Wednesday,
-                    DayOfWeek.Thursday,
-                    DayOfWeek.Friday
-                };
-                var marketHoursByDay = Enum.GetValues<DayOfWeek>()
-                    .ToDictionary(day => day, day => weekdays.Contains(day)
-                        ? new LocalMarketHours(
-                            day,
-                            new MarketHoursSegment(MarketHoursState.Market, new TimeSpan(9, 30, 0), new TimeSpan(11, 30, 0)),
-                            new MarketHoursSegment(MarketHoursState.Market, new TimeSpan(13, 0, 0), new TimeSpan(15, 0, 0)))
-                        : new LocalMarketHours(day));
-                var exchangeHours = new SecurityExchangeHours(
-                    TimeZones.Shanghai,
-                    Calendar.Value.Holidays,
-                    marketHoursByDay,
-                    new Dictionary<DateTime, TimeSpan>(),
-                    new Dictionary<DateTime, TimeSpan>());
+                    return;
+                }
 
-                MarketHoursDatabase.FromDataFolder().SetEntry(Name, null, SecurityType.Equity, exchangeHours);
-                SymbolPropertiesDatabase.FromDataFolder().SetEntry(
+                marketHoursDatabase.SetEntry(
+                    Name,
+                    null,
+                    SecurityType.Equity,
+                    ExchangeHours.Value);
+                symbolPropertiesDatabase.SetEntry(
                     Name,
                     null,
                     SecurityType.Equity,
@@ -87,6 +81,8 @@ namespace QuantConnect.Brokerages.Qmt
                         0.01m,
                         100m,
                         string.Empty));
+                _registeredMarketHoursDatabase = marketHoursDatabase;
+                _registeredSymbolPropertiesDatabase = symbolPropertiesDatabase;
                 Log.Trace(
                     $"QmtMarket.RegisterMetadata(): status=ok market={Name} " +
                     $"calendar_source={CalendarSource} coverage_start={CalendarCoverageStart:yyyy-MM-dd} " +
@@ -98,6 +94,12 @@ namespace QuantConnect.Brokerages.Qmt
         {
             EnsureCalendarCovers(date.Date);
             return Calendar.Value.TradingDays.Contains(date.Date);
+        }
+
+        public static bool IsMarketOpen(DateTime localTime)
+        {
+            EnsureCalendarCovers(localTime.Date);
+            return ExchangeHours.Value.IsOpen(localTime, false);
         }
 
         public static void EnsureCalendarCovers(DateTime date)
@@ -168,6 +170,32 @@ namespace QuantConnect.Brokerages.Qmt
                 coverageEnd,
                 tradingDays,
                 holidays);
+        }
+
+        private static SecurityExchangeHours CreateExchangeHours()
+        {
+            var weekdays = new[]
+            {
+                DayOfWeek.Monday,
+                DayOfWeek.Tuesday,
+                DayOfWeek.Wednesday,
+                DayOfWeek.Thursday,
+                DayOfWeek.Friday
+            };
+            var marketHoursByDay = Enum.GetValues<DayOfWeek>()
+                .ToDictionary(day => day, day => weekdays.Contains(day)
+                    ? new LocalMarketHours(
+                        day,
+                        new MarketHoursSegment(MarketHoursState.Market, new TimeSpan(9, 30, 0), new TimeSpan(11, 30, 0)),
+                        new MarketHoursSegment(MarketHoursState.Market, new TimeSpan(13, 0, 0), new TimeSpan(15, 0, 0)))
+                    : new LocalMarketHours(day));
+
+            return new SecurityExchangeHours(
+                TimeZones.Shanghai,
+                Calendar.Value.Holidays,
+                marketHoursByDay,
+                new Dictionary<DateTime, TimeSpan>(),
+                new Dictionary<DateTime, TimeSpan>());
         }
 
         private static DateTime ParseCalendarDate(string value, string fieldName)

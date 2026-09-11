@@ -52,6 +52,25 @@ class PythonStubTests(unittest.TestCase):
             enum_member_names,
         )
 
+        brokerage_model_method_names = {
+            node.name
+            for node in classes_by_name["QmtBrokerageModel"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {"__init__", "account_currency"},
+            brokerage_model_method_names,
+        )
+        self.assertEqual(
+            {
+                "QuantConnect.Brokerages.DefaultBrokerageModel",
+                "QuantConnect.Interfaces.IAccountCurrencyProvider",
+            },
+            {
+                ast.unparse(base)
+                for base in classes_by_name["QmtBrokerageModel"].bases
+            },
+        )
         market_member_names = {
             statement.target.id
             for statement in classes_by_name["QmtMarket"].body
@@ -74,7 +93,12 @@ class PythonStubTests(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
         }
         self.assertEqual(
-            {"register_metadata", "is_trading_day", "ensure_calendar_covers"},
+            {
+                "register_metadata",
+                "is_trading_day",
+                "is_market_open",
+                "ensure_calendar_covers",
+            },
             market_method_names,
         )
 

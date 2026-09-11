@@ -32,6 +32,7 @@ namespace QuantConnect.Brokerages.Qmt
         public QmtBrokerageModel()
             : base(AccountType.Cash)
         {
+            QmtMarket.RegisterMetadata();
         }
 
         public override bool CanSubmitOrder(Security security, Order order, out BrokerageMessageEvent message)

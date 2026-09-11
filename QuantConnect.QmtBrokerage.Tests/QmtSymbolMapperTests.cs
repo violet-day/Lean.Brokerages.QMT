@@ -121,6 +121,72 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 Assert.That(QmtMarket.CalendarCoverageEnd, Is.EqualTo(new DateTime(2026, 12, 31)));
                 Assert.Throws<InvalidOperationException>(() =>
                     QmtMarket.EnsureCalendarCovers(new DateTime(2027, 1, 1)));
+                Assert.Throws<InvalidOperationException>(() =>
+                    QmtMarket.IsMarketOpen(new DateTime(2027, 1, 1, 10, 0, 0)));
+            });
+        }
+
+        [TestCase(2026, 8, 13, 9, 30, true)]
+        [TestCase(2026, 8, 13, 11, 30, false)]
+        [TestCase(2026, 8, 13, 13, 0, true)]
+        [TestCase(2026, 8, 13, 15, 0, false)]
+        [TestCase(2026, 10, 1, 10, 0, false)]
+        public void ChinaMarketOpenUsesRegisteredExchangeHours(
+            int year,
+            int month,
+            int day,
+            int hour,
+            int minute,
+            bool expectedIsOpen)
+        {
+            Assert.That(
+                QmtMarket.IsMarketOpen(new DateTime(year, month, day, hour, minute, 0)),
+                Is.EqualTo(expectedIsOpen));
+        }
+
+        [Test]
+        public void BrokerageModelConstructionRegistersMetadataOnce()
+        {
+            var repositoryDirectory = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", ".."));
+            var leanDataDirectory = Path.Combine(Directory.GetParent(repositoryDirectory).FullName, "Lean", "Data");
+            Config.Set("data-folder", leanDataDirectory);
+            Globals.Reset();
+            MarketHoursDatabase.Reset();
+            SymbolPropertiesDatabase.Reset();
+
+            _ = new QmtBrokerageModel();
+            var marketHoursDatabase = MarketHoursDatabase.FromDataFolder();
+            var symbolPropertiesDatabase = SymbolPropertiesDatabase.FromDataFolder();
+            var firstMarketHoursEntry = marketHoursDatabase.GetEntry(
+                QmtMarket.Name,
+                (string)null,
+                SecurityType.Equity);
+            var firstSymbolProperties = symbolPropertiesDatabase.GetSymbolProperties(
+                QmtMarket.Name,
+                null,
+                SecurityType.Equity,
+                QmtMarket.AccountCurrency);
+
+            _ = new QmtBrokerageModel();
+            var secondMarketHoursEntry = marketHoursDatabase.GetEntry(
+                QmtMarket.Name,
+                (string)null,
+                SecurityType.Equity);
+            var secondSymbolProperties = symbolPropertiesDatabase.GetSymbolProperties(
+                QmtMarket.Name,
+                null,
+                SecurityType.Equity,
+                QmtMarket.AccountCurrency);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(secondMarketHoursEntry, Is.SameAs(firstMarketHoursEntry));
+                Assert.That(secondSymbolProperties, Is.SameAs(firstSymbolProperties));
+                Assert.That(firstMarketHoursEntry.ExchangeHours.TimeZone, Is.EqualTo(TimeZones.Shanghai));
+                Assert.That(firstMarketHoursEntry.ExchangeHours.IsOpen(new DateTime(2026, 8, 13, 9, 30, 0), false), Is.True);
+                Assert.That(firstSymbolProperties.QuoteCurrency, Is.EqualTo(QmtMarket.AccountCurrency));
+                Assert.That(firstSymbolProperties.MinimumPriceVariation, Is.EqualTo(0.01m));
+                Assert.That(firstSymbolProperties.LotSize, Is.EqualTo(100m));
             });
         }
 

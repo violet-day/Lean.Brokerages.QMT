@@ -47,6 +47,9 @@ class QmtMarket:
     def is_trading_day(date: DateTime) -> bool: ...
 
     @staticmethod
+    def is_market_open(local_time: DateTime) -> bool: ...
+
+    @staticmethod
     def ensure_calendar_covers(date: DateTime) -> None: ...
 
 

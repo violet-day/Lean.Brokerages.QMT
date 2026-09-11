@@ -1,10 +1,14 @@
 using System;
+using System.IO;
 using NUnit.Framework;
+using QuantConnect.Configuration;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
+using QuantConnect.Interfaces;
 using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Securities;
+using QuantConnect.Util;
 
 namespace QuantConnect.Brokerages.Qmt.Tests
 {
@@ -12,6 +16,17 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     public class QmtBrokerageModelTests
     {
         private readonly QmtSymbolMapper _symbolMapper = new QmtSymbolMapper();
+
+        [OneTimeSetUp]
+        public void SetUpMarketMetadataDatabases()
+        {
+            var repositoryDirectory = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", ".."));
+            var leanDataDirectory = Path.Combine(Directory.GetParent(repositoryDirectory)!.FullName, "Lean", "Data");
+            Config.Set("data-folder", leanDataDirectory);
+            Globals.Reset();
+            MarketHoursDatabase.Reset();
+            SymbolPropertiesDatabase.Reset();
+        }
 
         [TestCase(OrderType.Market)]
         [TestCase(OrderType.Limit)]
