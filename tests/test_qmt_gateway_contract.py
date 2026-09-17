@@ -269,6 +269,34 @@ class QmtGatewayContractTests(unittest.TestCase):
         self.assertEqual("ACCOUNT_MISMATCH", response["error_code"])
         self.assertEqual([], native_trade_detail_query.calls)
 
+    def test_historical_deal_query_is_not_supported(self):
+        native_trade_detail_query = NativeTradeDetailQuery()
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="account-1",
+            get_trade_detail_data_function=native_trade_detail_query,
+            bind_host="127.0.0.1",
+            bind_port=0,
+        )
+        gateway.start()
+        client = GatewaySocketClient(gateway)
+        try:
+            response = client.request(
+                "query_historical_deals",
+                {
+                    "account_id": "account-1",
+                    "start_date": "20260916",
+                    "end_date": "20260916",
+                },
+            )
+        finally:
+            client.close()
+            gateway.stop()
+
+        self.assertFalse(response["success"])
+        self.assertEqual("UNSUPPORTED_OPERATION", response["error_code"])
+        self.assertEqual([], native_trade_detail_query.calls)
+
 
 if __name__ == "__main__":
     unittest.main()
