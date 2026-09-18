@@ -1,5 +1,6 @@
 import gc
 import importlib.util
+import inspect
 import os
 import queue
 import tempfile
@@ -74,6 +75,12 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         self.assertTrue(gateway._unsubscribe("42"))
         gc.collect()
         self.assertIsNone(callback_reference())
+
+    def test_accepts_installed_entry_history_query_argument(self):
+        self.assertIn(
+            "get_history_trade_detail_data_function",
+            inspect.signature(self.gateway_module.init).parameters,
+        )
 
     def test_polls_current_full_tick_when_native_callback_is_silent(self):
         current_last_price = [10.5]

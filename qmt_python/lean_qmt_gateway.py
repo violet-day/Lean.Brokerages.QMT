@@ -1968,6 +1968,7 @@ _gateway = None
 def init(
     context_info,
     get_trade_detail_data_function=None,
+    get_history_trade_detail_data_function=None,
     passorder_function=None,
     cancel_function=None,
     down_history_data_function=None,
