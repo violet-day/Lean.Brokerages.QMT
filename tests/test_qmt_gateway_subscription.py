@@ -4,6 +4,7 @@ import os
 import queue
 import tempfile
 import unittest
+from unittest.mock import Mock
 import weakref
 from pathlib import Path
 
@@ -74,29 +75,28 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         gc.collect()
         self.assertIsNone(callback_reference())
 
-    def test_polls_current_daily_snapshot_when_native_callback_is_silent(self):
-        current_close_price = [10.5]
+    def test_polls_current_full_tick_when_native_callback_is_silent(self):
+        current_last_price = [10.5]
         current_volume = [1000]
 
-        def get_market_data(**arguments):
-            self.assertEqual("1d", arguments["period"])
+        def get_full_tick(stock_codes):
             return {
                 stock_code: {
-                    "20260824": {
-                        "open": 10.4,
-                        "high": 10.6,
-                        "low": 10.3,
-                        "close": current_close_price[0],
-                        "volume": current_volume[0],
-                    }
+                    "time": "20260824144500",
+                    "lastPrice": current_last_price[0],
+                    "volume": current_volume[0],
+                    "bidPrice": [10.49],
+                    "askPrice": [10.51],
+                    "bidVol": [100],
+                    "askVol": [200],
                 }
-                for stock_code in arguments["stock_code"]
+                for stock_code in stock_codes
             }
 
         gateway = self.gateway_module.LeanQmtGateway(
             context_info=object(),
             account_id="subscription-test",
-            get_market_data_function=get_market_data,
+            get_full_tick_function=get_full_tick,
             subscribe_quote_function=lambda *arguments: arguments[0],
             unsubscribe_quote_function=lambda _: True,
         )
@@ -116,7 +116,7 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         with self.assertRaises(queue.Empty):
             gateway.get_queued_outgoing_message()
 
-        current_close_price[0] = 10.6
+        current_last_price[0] = 10.6
         current_volume[0] = 1200
         gateway._next_quote_poll_at = 0
         gateway._poll_quote_snapshots_if_due()
@@ -127,19 +127,14 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
     def test_replays_latest_snapshot_when_a_new_client_reuses_subscription(self):
         native_subscribe_calls = []
 
-        def get_market_data(**arguments):
-            self.assertEqual("1d", arguments["period"])
+        def get_full_tick(stock_codes):
             return {
                 stock_code: {
-                    "20260824": {
-                        "open": 10.4,
-                        "high": 10.6,
-                        "low": 10.3,
-                        "close": 10.5,
-                        "volume": 1000,
-                    }
+                    "time": "20260824144500",
+                    "lastPrice": 10.5,
+                    "volume": 1000,
                 }
-                for stock_code in arguments["stock_code"]
+                for stock_code in stock_codes
             }
 
         def subscribe_quote(*arguments):
@@ -149,7 +144,7 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         gateway = self.gateway_module.LeanQmtGateway(
             context_info=object(),
             account_id="subscription-test",
-            get_market_data_function=get_market_data,
+            get_full_tick_function=get_full_tick,
             subscribe_quote_function=subscribe_quote,
             unsubscribe_quote_function=lambda _: True,
         )
@@ -175,6 +170,23 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         self.assertEqual("quote", replayed_event["operation"])
         self.assertEqual("600000.SH", replayed_event["payload"]["stock_code"])
         self.assertEqual(10.5, replayed_event["payload"]["last_price"])
+
+    def test_does_not_publish_daily_history_as_a_realtime_quote(self):
+        daily_history_query = Mock()
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="subscription-test",
+            get_market_data_function=daily_history_query,
+            subscribe_quote_function=lambda *arguments: arguments[0],
+            unsubscribe_quote_function=lambda _: True,
+        )
+        gateway._subscribe({"stock_code": "600000.SH"})
+
+        gateway._poll_quote_snapshots_if_due()
+
+        daily_history_query.assert_not_called()
+        with self.assertRaises(queue.Empty):
+            gateway.get_queued_outgoing_message()
 
 
 if __name__ == "__main__":

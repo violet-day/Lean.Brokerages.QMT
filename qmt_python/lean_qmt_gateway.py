@@ -787,6 +787,7 @@ class LeanQmtGateway(object):
         cancel_function=None,
         down_history_data_function=None,
         get_market_data_function=None,
+        get_full_tick_function=None,
         subscribe_quote_function=None,
         unsubscribe_quote_function=None,
         bind_host=DEFAULT_BIND_HOST,
@@ -800,6 +801,7 @@ class LeanQmtGateway(object):
         self.cancel_function = cancel_function
         self.down_history_data_function = down_history_data_function
         self.get_market_data_function = get_market_data_function
+        self.get_full_tick_function = get_full_tick_function
         self.subscribe_quote_function = subscribe_quote_function
         self.unsubscribe_quote_function = unsubscribe_quote_function
         self.bind_host = str(bind_host or DEFAULT_BIND_HOST)
@@ -824,6 +826,7 @@ class LeanQmtGateway(object):
         self._last_polled_quote_signature_by_stock_code = {}
         self._next_quote_poll_at = 0.0
         self._quote_poll_has_succeeded = False
+        self._quote_poll_unavailable_logged = False
         self._quote_poll_empty_shape_logged = False
         self._quote_poll_unrecognized_record_logged = False
         self._cached_responses = {}
@@ -993,7 +996,15 @@ class LeanQmtGateway(object):
 
     def _poll_quote_snapshots_if_due(self):
         stock_codes = sorted(self._protocol_ids_by_stock_code.keys())
-        if not stock_codes or not callable(self.get_market_data_function):
+        if not stock_codes:
+            return
+        if not callable(self.get_full_tick_function):
+            if not self._quote_poll_unavailable_logged:
+                self._quote_poll_unavailable_logged = True
+                _log(
+                    "quote_poll_unavailable",
+                    reason="get_full_tick_missing",
+                )
             return
         current_time = time.monotonic()
         if current_time < self._next_quote_poll_at:
@@ -1001,34 +1012,22 @@ class LeanQmtGateway(object):
         self._next_quote_poll_at = current_time + QUOTE_POLL_INTERVAL_SECONDS
 
         try:
-            field_names = ["open", "high", "low", "close", "volume"]
-            market_data = self.get_market_data_function(
-                fields=field_names,
-                stock_code=stock_codes,
-                period="1d",
-                start_time="",
-                end_time="",
-                count=1,
-                dividend_type="none",
-                fill_data=True,
-                subscribe=False,
-            )
+            market_data = self.get_full_tick_function(stock_codes)
             published_count = 0
             stock_codes_with_records = 0
-            stock_codes_with_normalized_bars = 0
+            stock_codes_with_normalized_quotes = 0
             for stock_code in stock_codes:
-                records = _history_records(stock_code, market_data, field_names)
-                if not records:
+                quote_row, _ = _quote_row(stock_code, market_data)
+                if not quote_row:
                     continue
                 stock_codes_with_records += 1
-                bar = _normalize_history_bar(records[-1])
-                if bar is None:
+                quote_payload = _normalize_quote(stock_code, market_data)
+                if quote_payload["last_price"] <= 0:
                     if not self._quote_poll_unrecognized_record_logged:
                         self._quote_poll_unrecognized_record_logged = True
                         record_field_shapes = {}
-                        last_record = records[-1]
-                        if isinstance(last_record, dict):
-                            for field_name, field_value in last_record.items():
+                        if isinstance(quote_row, dict):
+                            for field_name, field_value in quote_row.items():
                                 try:
                                     field_length = len(field_value)
                                 except Exception:
@@ -1043,8 +1042,16 @@ class LeanQmtGateway(object):
                             stock_code=stock_code,
                         )
                     continue
-                stock_codes_with_normalized_bars += 1
-                signature = (bar["time"], bar["close"], bar["volume"])
+                stock_codes_with_normalized_quotes += 1
+                signature = (
+                    quote_payload["last_price"],
+                    quote_payload["volume"],
+                    quote_payload["amount"],
+                    quote_payload["bid_price"],
+                    quote_payload["ask_price"],
+                    quote_payload["bid_volume"],
+                    quote_payload["ask_volume"],
+                )
                 if (
                     self._last_polled_quote_signature_by_stock_code.get(
                         stock_code
@@ -1055,26 +1062,19 @@ class LeanQmtGateway(object):
                 self._last_polled_quote_signature_by_stock_code[stock_code] = (
                     signature
                 )
+                if not quote_payload["time"]:
+                    quote_payload["time"] = time.strftime("%Y%m%d%H%M%S")
                 self._publish_event(
                     "quote",
-                    {
-                        "stock_code": stock_code,
-                        "time": time.strftime("%Y%m%d%H%M%S"),
-                        "last_price": bar["close"],
-                        "volume": bar["volume"],
-                        "amount": 0,
-                        "bid_price": bar["close"],
-                        "ask_price": bar["close"],
-                        "bid_volume": 0,
-                        "ask_volume": 0,
-                    },
+                    quote_payload,
                 )
                 published_count += 1
             _log(
                 "quote_poll_complete",
-                normalized=stock_codes_with_normalized_bars,
+                normalized=stock_codes_with_normalized_quotes,
                 published=published_count,
                 records=stock_codes_with_records,
+                source="full_tick",
                 subscriptions=len(stock_codes),
             )
             if (
@@ -1094,6 +1094,7 @@ class LeanQmtGateway(object):
                     "quote_poll_empty_shape",
                     first_value_type=first_value_type,
                     market_data_type=type(market_data).__name__,
+                    source="full_tick",
                     top_level_keys=top_level_keys,
                 )
             if published_count and not self._quote_poll_has_succeeded:
@@ -2041,6 +2042,11 @@ def init(
         available=callable(get_market_data_function),
         download_available=callable(down_history_data_function),
     )
+    get_full_tick_function = getattr(context_info, "get_full_tick", None)
+    _log(
+        "full_tick_api_selected",
+        available=callable(get_full_tick_function),
+    )
     _gateway = LeanQmtGateway(
         context_info=context_info,
         account_id=account_id,
@@ -2049,6 +2055,7 @@ def init(
         cancel_function=cancel_function,
         down_history_data_function=down_history_data_function,
         get_market_data_function=get_market_data_function,
+        get_full_tick_function=get_full_tick_function,
         subscribe_quote_function=getattr(context_info, "subscribe_quote", None),
         unsubscribe_quote_function=getattr(
             context_info,
