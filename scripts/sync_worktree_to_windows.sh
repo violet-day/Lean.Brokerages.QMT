@@ -132,8 +132,27 @@ invoke_windows_powershell() {
     local remote_command="$1"
     local encoded_remote_command
     encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
-    SSHPASS="$windows_ssh_password" "$sshpass_executable" -e "$ssh_executable" "$windows_ssh_target" \
-        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command"
+    if "$ssh_executable" "${windows_ssh_options[@]}" -O check "$windows_ssh_target" >/dev/null 2>&1; then
+        "$ssh_executable" "${windows_ssh_options[@]}" "$windows_ssh_target" \
+            "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command"
+    else
+        SSHPASS="$windows_ssh_password" "$sshpass_executable" -e "$ssh_executable" \
+            "${windows_ssh_options[@]}" "$windows_ssh_target" \
+            "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command"
+    fi
+}
+
+copy_file_to_windows() {
+    local local_path="$1"
+    local windows_home_file_name="$2"
+    if "$ssh_executable" "${windows_ssh_options[@]}" -O check "$windows_ssh_target" >/dev/null 2>&1; then
+        "$scp_executable" "${windows_ssh_options[@]}" "$local_path" \
+            "$windows_ssh_target:$windows_home_file_name"
+    else
+        SSHPASS="$windows_ssh_password" "$sshpass_executable" -e "$scp_executable" \
+            "${windows_ssh_options[@]}" "$local_path" \
+            "$windows_ssh_target:$windows_home_file_name"
+    fi
 }
 
 qmt_connection_alias="$(zsh -ic 'print -r -- ${aliases[qmt]-}')"
@@ -142,7 +161,34 @@ if [[ "${sshpass_executable##*/}" != 'sshpass' || "$password_option" != '-p' || 
     echo '[qmt-test] host=mac stage=windows-connection status=failed reason=qmt-alias-unparseable' >&2
     exit 1
 fi
+windows_ssh_options=(
+    -o ControlMaster=auto
+    -o ControlPersist=60
+    -o "ControlPath=$HOME/.ssh/qmt-sync-%C"
+)
+scp_executable="$(command -v scp)"
 echo "[qmt-test] host=mac stage=windows-connection status=ready transport=ssh target=$windows_ssh_target authentication=sshpass-env"
+
+local_transfer_directory="$(mktemp -d)"
+snapshot_archive_path="$local_transfer_directory/workspace.tar.gz"
+snapshot_manifest_path="$local_transfer_directory/workspace-files"
+windows_snapshot_archive_name="qmt-workspace-$sync_started_at_seconds-$$.tar.gz"
+windows_snapshot_manifest_name="qmt-workspace-$sync_started_at_seconds-$$.files"
+windows_snapshot_archive_path="C:\\Users\\nemo\\$windows_snapshot_archive_name"
+windows_snapshot_manifest_path="C:\\Users\\nemo\\$windows_snapshot_manifest_name"
+
+cleanup_transfer_files() {
+    if [[ -f "$snapshot_archive_path" ]]; then
+        unlink "$snapshot_archive_path"
+    fi
+    if [[ -f "$snapshot_manifest_path" ]]; then
+        unlink "$snapshot_manifest_path"
+    fi
+    if [[ -d "$local_transfer_directory" ]]; then
+        rmdir "$local_transfer_directory"
+    fi
+}
+trap cleanup_transfer_files EXIT
 
 if [[ "$push_repository" == true ]]; then
     prepare_workspace_command="\$ErrorActionPreference = 'Stop'; git -C '$windows_git_repository_directory' fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; if (-not (Test-Path -LiteralPath '$windows_workspace_directory')) { git -C '$windows_git_repository_directory' worktree add --detach '$windows_workspace_directory' '$repository_commit'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } }; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } else { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=git'"
@@ -150,9 +196,9 @@ else
     prepare_workspace_command="\$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Path '$windows_workspace_directory' -Force | Out-Null; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } elseif (Test-Path -LiteralPath '$windows_workspace_directory\.git') { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) } else { \$previousSnapshotFiles = @() }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=local-snapshot'"
 fi
 
-extract_snapshot_command="\$ErrorActionPreference = 'Stop'; \$archiveBase64 = [Console]::In.ReadToEnd(); \$archivePath = [System.IO.Path]::GetTempFileName(); try { [System.IO.File]::WriteAllBytes(\$archivePath, [Convert]::FromBase64String(\$archiveBase64)); \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf \$archivePath -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; Get-ChildItem -LiteralPath '$windows_workspace_directory' -Filter '._*' -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force } finally { Remove-Item -LiteralPath \$archivePath -Force -ErrorAction SilentlyContinue }"
+extract_snapshot_command="\$ErrorActionPreference = 'Stop'; try { \$tarExecutable = (Get-Command tar.exe -ErrorAction Stop).Source; & \$tarExecutable -xzf '$windows_snapshot_archive_path' -C '$windows_workspace_directory'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; Get-ChildItem -LiteralPath '$windows_workspace_directory' -Filter '._*' -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force } finally { Remove-Item -LiteralPath '$windows_snapshot_archive_path' -Force -ErrorAction SilentlyContinue }"
 
-write_snapshot_manifest_command="\$ErrorActionPreference = 'Stop'; \$manifestBase64 = [Console]::In.ReadToEnd(); [System.IO.File]::WriteAllBytes('$windows_workspace_manifest_path', [Convert]::FromBase64String(\$manifestBase64)); '[qmt-test] host=windows stage=workspace-snapshot status=ok files=$snapshot_file_count changes=$snapshot_change_count path=$windows_workspace_directory'"
+write_snapshot_manifest_command="\$ErrorActionPreference = 'Stop'; Move-Item -LiteralPath '$windows_snapshot_manifest_path' -Destination '$windows_workspace_manifest_path' -Force; '[qmt-test] host=windows stage=workspace-snapshot status=ok files=$snapshot_file_count changes=$snapshot_change_count path=$windows_workspace_directory'"
 
 deploy_gateway_source_command="\$ErrorActionPreference = 'Stop'; \$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_source_path').Hash; \$destinationHash = if (Test-Path -LiteralPath '$windows_gateway_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_source_path').Hash } else { '' }; if (\$sourceHash -ne \$destinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_source_path' -Destination '$windows_gateway_source_path' -Force; \$action = 'update' } else { \$action = 'none' }; \$gatewaySource = Get-Item -LiteralPath '$windows_gateway_source_path'; \"[qmt-test] host=windows stage=gateway-source status=ok action=\$action bytes=\$(\$gatewaySource.Length) sha256=\$sourceHash path=\$(\$gatewaySource.FullName)\"; \$entrySourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_workspace_gateway_entry_source_path').Hash; \$entryDestinationHash = if (Test-Path -LiteralPath '$windows_gateway_entry_source_path') { (Get-FileHash -Algorithm SHA256 -LiteralPath '$windows_gateway_entry_source_path').Hash } else { '' }; if (\$entrySourceHash -ne \$entryDestinationHash) { Copy-Item -LiteralPath '$windows_workspace_gateway_entry_source_path' -Destination '$windows_gateway_entry_source_path' -Force; \$entryAction = 'update' } else { \$entryAction = 'none' }; \$gatewayEntrySource = Get-Item -LiteralPath '$windows_gateway_entry_source_path'; \"[qmt-test] host=windows stage=gateway-entry-source status=ok action=\$entryAction bytes=\$(\$gatewayEntrySource.Length) sha256=\$entrySourceHash path=\$(\$gatewayEntrySource.FullName)\""
 
@@ -165,14 +211,16 @@ invoke_windows_powershell "$prepare_workspace_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee "$windows_test_log_path"
 list_snapshot_files \
-    | COPYFILE_DISABLE=1 tar -C "$repository_directory" --null -T - -czf - \
-    | base64 \
-    | invoke_windows_powershell "$extract_snapshot_command" 2>&1 \
+    | COPYFILE_DISABLE=1 tar -C "$repository_directory" --null -T - -czf "$snapshot_archive_path"
+list_snapshot_files > "$snapshot_manifest_path"
+echo "[qmt-test] host=mac stage=workspace-upload status=start files=$snapshot_file_count"
+copy_file_to_windows "$snapshot_archive_path" "$windows_snapshot_archive_name"
+copy_file_to_windows "$snapshot_manifest_path" "$windows_snapshot_manifest_name"
+echo "[qmt-test] host=mac stage=workspace-upload status=ok files=$snapshot_file_count"
+invoke_windows_powershell "$extract_snapshot_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee -a "$windows_test_log_path"
-list_snapshot_files \
-    | base64 \
-    | invoke_windows_powershell "$write_snapshot_manifest_command" 2>&1 \
+invoke_windows_powershell "$write_snapshot_manifest_command" 2>&1 \
     | LC_ALL=C perl -pe '$| = 1; s/\r//g' \
     | tee -a "$windows_test_log_path"
 invoke_windows_powershell "$deploy_gateway_source_command" 2>&1 \
