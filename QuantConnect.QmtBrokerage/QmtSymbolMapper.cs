@@ -96,11 +96,22 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             var securityCode = QmtSecurityCode.Parse(brokerageSymbol);
+            var normalizedBrokerageSymbol = securityCode.ToString();
+            if (SymbolCache.TryGetSymbol(normalizedBrokerageSymbol, out var cachedSymbol) &&
+                cachedSymbol.SecurityType == SecurityType.Equity &&
+                string.Equals(cachedSymbol.ID.Market, MarketName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(cachedSymbol.ID.Symbol, securityCode.Ticker, StringComparison.OrdinalIgnoreCase))
+            {
+                return cachedSymbol;
+            }
+
             var securityIdentifier = SecurityIdentifier.GenerateEquity(
                 SecurityIdentifier.DefaultDate,
                 securityCode.Ticker,
                 MarketName);
-            return new Symbol(securityIdentifier, securityCode.ToString());
+            var leanSymbol = new Symbol(securityIdentifier, normalizedBrokerageSymbol);
+            SymbolCache.Set(normalizedBrokerageSymbol, leanSymbol);
+            return leanSymbol;
         }
     }
 }

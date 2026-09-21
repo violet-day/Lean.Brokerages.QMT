@@ -173,13 +173,17 @@ namespace QuantConnect.Brokerages.Qmt
             EnsureConnected();
             var response = SendRequest(QmtProtocol.Operations.QueryOrders);
             var snapshots = response.ToPayload<QmtQueryOrdersPayload>().Orders;
-            var orders = snapshots
+            var openOrderSnapshots = snapshots
                 .Where(snapshot => QmtOrderStatusMapper.GetLeanOrderStatus(snapshot.Status).IsOpen())
+                .ToList();
+            var orders = openOrderSnapshots
                 .Select(CreateLeanOrder)
                 .Where(order => order != null)
                 .Cast<Order>()
                 .ToList();
-            Log.Trace($"QmtBrokerage.GetOpenOrders(): status=ok open_orders={orders.Count}");
+            Log.Trace(
+                $"QmtBrokerage.GetOpenOrders(): status=ok open_order_snapshots={openOrderSnapshots.Count} " +
+                $"mapped_open_orders={orders.Count} skipped_open_orders={openOrderSnapshots.Count - orders.Count}");
             return orders;
         }
 

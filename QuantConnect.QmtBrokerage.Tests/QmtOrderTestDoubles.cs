@@ -36,6 +36,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     internal sealed class QmtOrderTestGatewayClient : IQmtGatewayClient
     {
         private readonly bool _cancellationSubmitted;
+        private readonly List<QmtOrderSnapshot> _orderSnapshots;
 
         public bool IsConnected { get; private set; } = true;
         public QmtPlaceOrderRequest? PlaceOrderRequest { get; private set; }
@@ -51,9 +52,11 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
         public QmtOrderTestGatewayClient(
             bool cancellationSubmitted = true,
-            bool isSimulation = false)
+            bool isSimulation = false,
+            IEnumerable<QmtOrderSnapshot>? orderSnapshots = null)
         {
             _cancellationSubmitted = cancellationSubmitted;
+            _orderSnapshots = orderSnapshots?.ToList() ?? new List<QmtOrderSnapshot>();
             ServerInformation = new QmtHelloPayload
             {
                 AccountId = "order-test",
@@ -116,6 +119,21 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     {
                         Canceled = _cancellationSubmitted,
                         OrderId = "native-order-1"
+                    })
+                });
+            }
+
+            if (operation == QmtProtocol.Operations.QueryOrders)
+            {
+                return Task.FromResult(new QmtProtocolMessage
+                {
+                    MessageType = QmtProtocol.MessageTypes.Response,
+                    RequestId = "query-orders-request",
+                    Operation = operation,
+                    Success = true,
+                    Payload = JObject.FromObject(new QmtQueryOrdersPayload
+                    {
+                        Orders = _orderSnapshots
                     })
                 });
             }

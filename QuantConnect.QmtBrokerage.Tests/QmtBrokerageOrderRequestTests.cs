@@ -13,6 +13,51 @@ namespace QuantConnect.Brokerages.Qmt.Tests
     public class QmtBrokerageOrderRequestTests
     {
         [Test]
+        public void RegistersOpenOrderSymbolForLeanSecurityRestoration()
+        {
+            const string brokerageSymbol = "601123.SH";
+            SymbolCache.TryRemove(brokerageSymbol);
+            try
+            {
+                var gatewayClient = new QmtOrderTestGatewayClient(
+                    orderSnapshots: new[]
+                    {
+                        new QmtOrderSnapshot
+                        {
+                            StockCode = brokerageSymbol,
+                            OrderId = "native-open-order-1",
+                            Direction = "buy",
+                            OrderType = "limit",
+                            Status = 50,
+                            OriginalVolume = 100,
+                            LimitPrice = 12.34m
+                        }
+                    });
+                using var brokerage = new QmtBrokerage(
+                    gatewayClient,
+                    new QmtOrderTestProvider());
+
+                var openOrder = brokerage.GetOpenOrders().Single();
+                var translated = SymbolCache.TryGetSymbol(
+                    openOrder.Symbol.Value,
+                    out var translatedSymbol);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(translated, Is.True);
+                    Assert.That(translatedSymbol, Is.SameAs(openOrder.Symbol));
+                    Assert.That(openOrder.Symbol.Value, Is.EqualTo(brokerageSymbol));
+                    Assert.That(openOrder.Symbol.ID.Symbol, Is.EqualTo("601123"));
+                    Assert.That(openOrder.Symbol.ID.Market, Is.EqualTo(QmtSymbolMapper.MarketName));
+                });
+            }
+            finally
+            {
+                SymbolCache.TryRemove(brokerageSymbol);
+            }
+        }
+
+        [Test]
         public void SendsLeanOrderIdAsClientOrderId()
         {
             var gatewayClient = new QmtOrderTestGatewayClient(cancellationSubmitted: true);
