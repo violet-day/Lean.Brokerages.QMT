@@ -132,8 +132,17 @@ invoke_windows_powershell() {
     local remote_command="$1"
     local encoded_remote_command
     encoded_remote_command="$(printf '%s' "$remote_command" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
-    zsh -ic 'qmt "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $1"' -- "$encoded_remote_command"
+    SSHPASS="$windows_ssh_password" "$sshpass_executable" -e "$ssh_executable" "$windows_ssh_target" \
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_remote_command"
 }
+
+qmt_connection_alias="$(zsh -ic 'print -r -- ${aliases[qmt]-}')"
+read -r sshpass_executable password_option windows_ssh_password ssh_executable windows_ssh_target <<< "$qmt_connection_alias"
+if [[ "${sshpass_executable##*/}" != 'sshpass' || "$password_option" != '-p' || "${ssh_executable##*/}" != 'ssh' || -z "$windows_ssh_password" || -z "$windows_ssh_target" ]]; then
+    echo '[qmt-test] host=mac stage=windows-connection status=failed reason=qmt-alias-unparseable' >&2
+    exit 1
+fi
+echo "[qmt-test] host=mac stage=windows-connection status=ready transport=ssh target=$windows_ssh_target authentication=sshpass-env"
 
 if [[ "$push_repository" == true ]]; then
     prepare_workspace_command="\$ErrorActionPreference = 'Stop'; git -C '$windows_git_repository_directory' fetch origin '$repository_branch'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; if (-not (Test-Path -LiteralPath '$windows_workspace_directory')) { git -C '$windows_git_repository_directory' worktree add --detach '$windows_workspace_directory' '$repository_commit'; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE } }; if (Test-Path -LiteralPath '$windows_workspace_manifest_path') { \$previousSnapshotBytes = [System.IO.File]::ReadAllBytes('$windows_workspace_manifest_path'); \$previousSnapshotFiles = [System.Text.Encoding]::UTF8.GetString(\$previousSnapshotBytes).Split([char]0) } else { \$previousSnapshotFiles = @(git -C '$windows_workspace_directory' ls-files) }; foreach (\$relativePath in \$previousSnapshotFiles) { if (-not [string]::IsNullOrWhiteSpace(\$relativePath)) { Remove-Item -LiteralPath (Join-Path '$windows_workspace_directory' \$relativePath) -Force -ErrorAction SilentlyContinue } }; '[qmt-test] host=windows stage=workspace status=ready path=$windows_workspace_directory base_commit=$repository_commit source=git'"
