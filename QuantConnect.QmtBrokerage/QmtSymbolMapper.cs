@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 namespace QuantConnect.Brokerages.Qmt
 {
@@ -33,21 +34,7 @@ namespace QuantConnect.Brokerages.Qmt
                 return QmtSecurityCode.Parse(symbol.Value).ToString();
             }
 
-            if (symbol.Value.Length != 6)
-            {
-                throw new ArgumentException("QMT equity tickers must contain six digits.", nameof(symbol));
-            }
-
-            var exchange = symbol.Value[0] switch
-            {
-                '5' or '6' or '9' => QmtExchange.Shanghai,
-                '0' or '1' or '2' or '3' => QmtExchange.Shenzhen,
-                '4' or '8' => QmtExchange.Beijing,
-                _ => throw new ArgumentException(
-                    "The QMT exchange cannot be inferred from this ticker. Use a ticker with .SH, .SZ, or .BJ.",
-                    nameof(symbol))
-            };
-
+            var exchange = InferExchangeFromTicker(symbol.Value, nameof(symbol));
             return new QmtSecurityCode(symbol.Value, exchange).ToString();
         }
 
@@ -95,7 +82,16 @@ namespace QuantConnect.Brokerages.Qmt
                 throw new ArgumentException("QMT equity symbols must use the china market.", nameof(market));
             }
 
-            var securityCode = QmtSecurityCode.Parse(brokerageSymbol);
+            if (string.IsNullOrWhiteSpace(brokerageSymbol))
+            {
+                throw new ArgumentException("A QMT brokerage symbol is required.", nameof(brokerageSymbol));
+            }
+
+            var securityCode = brokerageSymbol.Contains(".")
+                ? QmtSecurityCode.Parse(brokerageSymbol)
+                : new QmtSecurityCode(
+                    brokerageSymbol,
+                    InferExchangeFromTicker(brokerageSymbol, nameof(brokerageSymbol)));
             var normalizedBrokerageSymbol = securityCode.ToString();
             if (SymbolCache.TryGetSymbol(normalizedBrokerageSymbol, out var cachedSymbol) &&
                 cachedSymbol.SecurityType == SecurityType.Equity &&
@@ -112,6 +108,28 @@ namespace QuantConnect.Brokerages.Qmt
             var leanSymbol = new Symbol(securityIdentifier, normalizedBrokerageSymbol);
             SymbolCache.Set(normalizedBrokerageSymbol, leanSymbol);
             return leanSymbol;
+        }
+
+        private static QmtExchange InferExchangeFromTicker(string ticker, string parameterName)
+        {
+            if (string.IsNullOrWhiteSpace(ticker) ||
+                ticker.Length != 6 ||
+                !ticker.All(char.IsDigit))
+            {
+                throw new ArgumentException(
+                    "QMT equity tickers must contain exactly six digits.",
+                    parameterName);
+            }
+
+            return ticker[0] switch
+            {
+                '5' or '6' or '9' => QmtExchange.Shanghai,
+                '0' or '1' or '2' or '3' => QmtExchange.Shenzhen,
+                '4' or '8' => QmtExchange.Beijing,
+                _ => throw new ArgumentException(
+                    "The QMT exchange cannot be inferred from this ticker. Use a ticker with .SH, .SZ, or .BJ.",
+                    parameterName)
+            };
         }
     }
 }
