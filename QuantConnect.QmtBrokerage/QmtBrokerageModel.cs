@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using QuantConnect.Benchmarks;
 using QuantConnect.Interfaces;
+using QuantConnect.Logging;
 using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
 using QuantConnect.Securities;
@@ -15,6 +17,8 @@ namespace QuantConnect.Brokerages.Qmt
     /// </summary>
     public sealed class QmtBrokerageModel : DefaultBrokerageModel, IAccountCurrencyProvider
     {
+        private readonly QmtEquityFeeModel _feeModel;
+        private int _feeModelSelectionLogState;
         private static readonly HashSet<OrderType> SupportedOrderTypes = new HashSet<OrderType>
         {
             OrderType.Market,
@@ -29,10 +33,13 @@ namespace QuantConnect.Brokerages.Qmt
 
         public string AccountCurrency => QmtMarket.AccountCurrency;
 
-        public QmtBrokerageModel()
+        public QmtBrokerageModel(
+            decimal commissionRate = QmtEquityFeeModel.DefaultCommissionRate,
+            decimal minimumCommission = QmtEquityFeeModel.DefaultMinimumCommission)
             : base(AccountType.Cash)
         {
             QmtMarket.RegisterMetadata();
+            _feeModel = new QmtEquityFeeModel(commissionRate, minimumCommission);
         }
 
         public override bool CanSubmitOrder(Security security, Order order, out BrokerageMessageEvent message)
@@ -109,7 +116,12 @@ namespace QuantConnect.Brokerages.Qmt
 
         public override IFeeModel GetFeeModel(Security security)
         {
-            return new ConstantFeeModel(0m, QmtMarket.AccountCurrency);
+            if (Interlocked.Exchange(ref _feeModelSelectionLogState, 1) == 0)
+            {
+                Log.Trace($"QmtBrokerageModel.GetFeeModel(): status=ok model={nameof(QmtEquityFeeModel)}");
+            }
+
+            return _feeModel;
         }
 
         public override IBenchmark GetBenchmark(SecurityManager securities)

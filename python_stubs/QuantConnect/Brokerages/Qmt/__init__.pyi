@@ -28,7 +28,11 @@ class QmtBrokerageModel(
     @property
     def account_currency(self) -> str: ...
 
-    def __init__(self) -> None: ...
+    def __init__(
+        self,
+        commission_rate: float = ...,
+        minimum_commission: float = ...,
+    ) -> None: ...
 
 
 class QmtMarket:

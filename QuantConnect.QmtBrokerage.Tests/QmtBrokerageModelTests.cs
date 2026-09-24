@@ -128,20 +128,20 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         }
 
         [Test]
-        public void UsesZeroCnyFeeForChinaEquity()
+        public void UsesQmtEquityFeeModelForChinaEquity()
         {
             var symbol = _symbolMapper.GetLeanSymbol("600000.SH", SecurityType.Equity, QmtSymbolMapper.MarketName);
             var security = CreateSecurity(symbol);
+            security.SetMarketPrice(new Tick(DateTime.UtcNow, symbol, 10m, 10m));
             var order = new MarketOrder(symbol, 100, DateTime.UtcNow);
 
-            var fee = new QmtBrokerageModel()
-                .GetFeeModel(security)
-                .GetOrderFee(new OrderFeeParameters(security, order))
-                .Value;
+            var feeModel = new QmtBrokerageModel().GetFeeModel(security);
+            var fee = feeModel.GetOrderFee(new OrderFeeParameters(security, order)).Value;
 
             Assert.Multiple(() =>
             {
-                Assert.That(fee.Amount, Is.Zero);
+                Assert.That(feeModel, Is.TypeOf<QmtEquityFeeModel>());
+                Assert.That(fee.Amount, Is.EqualTo(5.01m));
                 Assert.That(fee.Currency, Is.EqualTo(QmtMarket.AccountCurrency));
             });
         }

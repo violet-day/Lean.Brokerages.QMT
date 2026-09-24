@@ -86,6 +86,13 @@ implements LEAN's optional account-currency provider, so selecting that model in
 a backtest changes the account currency to CNY before securities or cash are
 added. A conflicting earlier `SetAccountCurrency` call fails initialization.
 
+Backtests use `QmtEquityFeeModel`. Its default Guojin A-share terms are a 0.023%
+commission with a CNY 5 minimum per order, 0.05% stamp duty on sells, and a
+0.001% transfer fee on both buys and sells in the Shanghai, Shenzhen, and
+Beijing markets. Account-specific terms can be supplied as
+`QmtBrokerageModel(commissionRate, minimumCommission)`. Live fills continue to
+use the actual fee reported by QMT.
+
 Transport loss starts one cancellable reconnect loop. Attempts wait
 `1, 2, 5, 10, 20, 30, 60` seconds and then remain at 60 seconds without jitter.
 An attempt is complete only after the Gateway handshake, account/position/order
