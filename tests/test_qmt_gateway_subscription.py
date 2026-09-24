@@ -129,7 +129,8 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         gateway._poll_quote_snapshots_if_due()
         _, changed_event = gateway.get_queued_outgoing_message()
         self.assertEqual(10.6, changed_event["payload"]["last_price"])
-        self.assertEqual(1200, changed_event["payload"]["volume"])
+        self.assertEqual(120_000, changed_event["payload"]["volume"])
+        self.assertEqual("shares", changed_event["payload"]["volume_unit"])
 
     def test_replays_latest_snapshot_when_a_new_client_reuses_subscription(self):
         native_subscribe_calls = []

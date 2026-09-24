@@ -216,7 +216,13 @@ namespace QuantConnect.Brokerages.Qmt
                 StartTime = request.StartTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
                 EndTime = request.EndTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
             });
-            var bars = response.ToPayload<QmtQueryHistoryPayload>().Bars
+            var historyPayload = response.ToPayload<QmtQueryHistoryPayload>();
+            if (!string.Equals(historyPayload.VolumeUnit, "shares", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"QMT history volume unit must be shares, received '{historyPayload.VolumeUnit}'.");
+            }
+            var bars = historyPayload.Bars
                 .Select(bar => (BaseData)new TradeBar(
                     ParseQmtTime(bar.Time),
                     request.Symbol,
@@ -609,6 +615,11 @@ namespace QuantConnect.Brokerages.Qmt
 
         private void HandleQuote(QmtQuoteEventPayload quote)
         {
+            if (!string.Equals(quote.VolumeUnit, "shares", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"QMT quote volume unit must be shares, received '{quote.VolumeUnit}'.");
+            }
             var brokerageStockCode = QmtSecurityCode.Parse(quote.StockCode).ToString();
             if (!_subscriptions.TryGetValue(brokerageStockCode, out var subscriptionState))
             {

@@ -133,6 +133,18 @@ def scaled_price(price_value):
     return int((price * Decimal("10000")).quantize(Decimal("1"), ROUND_HALF_UP))
 
 
+def history_bars_with_share_volume(history_payload):
+    if history_payload.get("volume_unit") != "shares":
+        raise RuntimeError(
+            "QMT query_history volume unit must be shares, received %r"
+            % history_payload.get("volume_unit")
+        )
+    history_bars = history_payload.get("bars")
+    if not isinstance(history_bars, list):
+        raise RuntimeError("QMT query_history returned no bars list")
+    return history_bars
+
+
 def quantconnect_minute_rows(history_bars, trading_date):
     bars_by_time = {}
     for history_bar in history_bars:
@@ -348,9 +360,7 @@ def main():
                 },
             )
 
-        history_bars = history_payload.get("bars")
-        if not isinstance(history_bars, list):
-            raise RuntimeError("QMT query_history returned no bars list")
+        history_bars = history_bars_with_share_volume(history_payload)
         quantconnect_rows = quantconnect_minute_rows(history_bars, trading_date)
         write_evidence(
             current_stage,

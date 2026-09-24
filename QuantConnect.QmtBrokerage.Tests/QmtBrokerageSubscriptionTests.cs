@@ -44,6 +44,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 Time = "20260824150000",
                 LastPrice = 9.22m,
                 Volume = 1000m,
+                VolumeUnit = "shares",
                 BidPrice = 9.21m,
                 AskPrice = 9.22m,
                 BidVolume = 100m,

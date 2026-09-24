@@ -333,6 +333,9 @@ namespace QuantConnect.Brokerages.Qmt
 
     public sealed class QmtQueryHistoryPayload
     {
+        [JsonProperty("volume_unit")]
+        public string VolumeUnit { get; set; } = string.Empty;
+
         [JsonProperty("bars")]
         public List<QmtHistoryBar> Bars { get; set; } = new List<QmtHistoryBar>();
     }
@@ -398,6 +401,9 @@ namespace QuantConnect.Brokerages.Qmt
 
         [JsonProperty("volume")]
         public decimal Volume { get; set; }
+
+        [JsonProperty("volume_unit")]
+        public string VolumeUnit { get; set; } = string.Empty;
 
         [JsonProperty("amount")]
         public decimal Amount { get; set; }

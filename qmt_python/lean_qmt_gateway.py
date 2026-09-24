@@ -50,6 +50,7 @@ REQUEST_PUMP_MARKET = "SH"
 QUOTE_POLL_INTERVAL_SECONDS = 30.0
 NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS = 5.0
 NETWORK_RECOVERY_RETRY_SECONDS = 5.0
+A_SHARE_SHARES_PER_LOT = 100
 MARKET_ORDER_SUBMISSIONS = {
     "latest-price": {
         "SH": (5, -1.0),
@@ -623,12 +624,18 @@ def _quote_row(stock_code, quote_data):
 
 def _normalize_quote(stock_code, quote_data):
     quote_row, inferred_time = _quote_row(stock_code, quote_data)
-    raw_cumulative_volume = _number(
-        _attribute(quote_row, ("pvolume", "raw_volume"), 0)
+    raw_cumulative_volume = _attribute(
+        quote_row,
+        ("pvolume", "raw_volume"),
+        None,
     )
-    cumulative_volume = raw_cumulative_volume or _number(
-        _attribute(quote_row, ("volume",), 0)
-    )
+    if raw_cumulative_volume is None:
+        cumulative_volume = (
+            _number(_attribute(quote_row, ("volume",), 0))
+            * A_SHARE_SHARES_PER_LOT
+        )
+    else:
+        cumulative_volume = _number(raw_cumulative_volume)
     return {
         "stock_code": stock_code,
         "time": str(
@@ -643,6 +650,7 @@ def _normalize_quote(stock_code, quote_data):
             _attribute(quote_row, ("lastPrice", "last_price"), 0)
         ),
         "volume": cumulative_volume,
+        "volume_unit": "shares",
         "amount": _number(_attribute(quote_row, ("amount",), 0)),
         "bid_price": _first_number(
             _attribute(quote_row, ("bidPrice", "bid_price"), 0)
@@ -738,22 +746,61 @@ def _history_records(stock_code, history_data, field_names):
     return []
 
 
-def _normalize_history_bar(history_row):
+def _history_volume_in_shares(
+    history_row,
+    typical_price,
+    volume_unit_without_amount,
+):
+    source_volume = _number(_attribute(history_row, ("volume",), 0))
+    if source_volume <= 0:
+        return max(source_volume, 0), "zero"
+
+    trading_amount = _number(_attribute(history_row, ("amount",), 0))
+    if trading_amount > 0 and typical_price > 0:
+        turnover_error_if_shares = abs(
+            trading_amount - typical_price * source_volume
+        )
+        turnover_error_if_lots = abs(
+            trading_amount
+            - typical_price * source_volume * A_SHARE_SHARES_PER_LOT
+        )
+        if turnover_error_if_lots < turnover_error_if_shares:
+            return source_volume * A_SHARE_SHARES_PER_LOT, "lots"
+        return source_volume, "shares"
+
+    if volume_unit_without_amount == "lots":
+        return source_volume * A_SHARE_SHARES_PER_LOT, "lots_unverified"
+    return source_volume, "shares_unverified"
+
+
+def _normalize_history_bar(
+    history_row,
+    volume_unit_without_amount="shares",
+):
     if not isinstance(history_row, dict):
-        return None
+        return None, "invalid"
     close_price = _number(_attribute(history_row, ("close",), 0))
     if close_price <= 0:
-        return None
+        return None, "invalid"
+    open_price = _number(_attribute(history_row, ("open",), close_price))
+    high_price = _number(_attribute(history_row, ("high",), close_price))
+    low_price = _number(_attribute(history_row, ("low",), close_price))
+    typical_price = (high_price + low_price + close_price) / 3
+    volume_in_shares, source_volume_unit = _history_volume_in_shares(
+        history_row,
+        typical_price,
+        volume_unit_without_amount,
+    )
     return {
         "time": str(
             _attribute(history_row, ("stime", "time"), "") or ""
         ),
-        "open": _number(_attribute(history_row, ("open",), close_price)),
-        "high": _number(_attribute(history_row, ("high",), close_price)),
-        "low": _number(_attribute(history_row, ("low",), close_price)),
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
         "close": close_price,
-        "volume": _number(_attribute(history_row, ("volume",), 0)),
-    }
+        "volume": volume_in_shares,
+    }, source_volume_unit
 
 
 def _protocol_message(
@@ -787,6 +834,7 @@ class LeanQmtGateway(object):
         cancel_function=None,
         down_history_data_function=None,
         get_market_data_function=None,
+        history_volume_unit_without_amount="shares",
         get_full_tick_function=None,
         subscribe_quote_function=None,
         unsubscribe_quote_function=None,
@@ -801,6 +849,9 @@ class LeanQmtGateway(object):
         self.cancel_function = cancel_function
         self.down_history_data_function = down_history_data_function
         self.get_market_data_function = get_market_data_function
+        self.history_volume_unit_without_amount = str(
+            history_volume_unit_without_amount or "shares"
+        )
         self.get_full_tick_function = get_full_tick_function
         self.subscribe_quote_function = subscribe_quote_function
         self.unsubscribe_quote_function = unsubscribe_quote_function
@@ -1570,7 +1621,14 @@ class LeanQmtGateway(object):
             )
         else:
             _log("history_download_unavailable", stock_code=stock_code)
-        history_field_names = ["open", "high", "low", "close", "volume"]
+        history_field_names = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+        ]
         history_data = self.get_market_data_function(
             fields=history_field_names,
             stock_code=[stock_code],
@@ -1595,10 +1653,17 @@ class LeanQmtGateway(object):
             stock_code=stock_code,
         )
         bars = []
+        source_volume_unit_counts = {}
         for history_row in history_records:
-            normalized_bar = _normalize_history_bar(history_row)
+            normalized_bar, source_volume_unit = _normalize_history_bar(
+                history_row,
+                self.history_volume_unit_without_amount,
+            )
             if normalized_bar is not None:
                 bars.append(normalized_bar)
+                source_volume_unit_counts[source_volume_unit] = (
+                    source_volume_unit_counts.get(source_volume_unit, 0) + 1
+                )
         bars.sort(key=lambda history_bar: history_bar["time"])
         _log(
             "history_query_ok",
@@ -1608,10 +1673,12 @@ class LeanQmtGateway(object):
             first_time=bars[0]["time"] if bars else "",
             last_time=bars[-1]["time"] if bars else "",
             period=period,
+            source_volume_units=repr(source_volume_unit_counts),
             start_time=start_time,
             stock_code=stock_code,
+            stored_volume_unit="shares",
         )
-        return {"bars": bars}
+        return {"bars": bars, "volume_unit": "shares"}
 
     def _query_trade_detail(self, detail_type):
         if not self.account_id:
@@ -2056,6 +2123,9 @@ def init(
         cancel_function=cancel_function,
         down_history_data_function=down_history_data_function,
         get_market_data_function=get_market_data_function,
+        history_volume_unit_without_amount=(
+            "shares" if history_api_name == "get_market_data_ex_ori" else "lots"
+        ),
         get_full_tick_function=get_full_tick_function,
         subscribe_quote_function=getattr(context_info, "subscribe_quote", None),
         unsubscribe_quote_function=getattr(

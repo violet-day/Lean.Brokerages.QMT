@@ -133,6 +133,15 @@ Final order state arrives through an `order` event.
 
 ### Market data
 
+`query_history` returns bars whose `volume` is always the number of shares. The
+Gateway uses QMT turnover to distinguish source values reported in shares from
+values reported in lots and converts lots at 100 shares per lot. Consumers must
+reject any payload whose `volume_unit` is not `shares`:
+
+```json
+{"volume_unit":"shares","bars":[{"time":"20260924000000","open":10.00,"high":10.20,"low":9.90,"close":10.10,"volume":123400}]}
+```
+
 `subscribe` request:
 
 ```json
@@ -166,8 +175,12 @@ All events use `message_type: "event"`. MVP operations are `quote`, `order`, `de
 Representative quote payload:
 
 ```json
-{"stock_code":"000001.SZ","time":"2026-08-13T09:30:01.123+08:00","last_price":10.25,"volume":1200,"amount":12300,"bid_price":10.24,"ask_price":10.25,"bid_volume":500,"ask_volume":300}
+{"stock_code":"000001.SZ","time":"2026-08-13T09:30:01.123+08:00","last_price":10.25,"volume":120000,"volume_unit":"shares","amount":1230000,"bid_price":10.24,"ask_price":10.25,"bid_volume":500,"ask_volume":300}
 ```
+
+Quote `volume` is cumulative shares. The Gateway prefers QMT `pvolume`, which
+is the unconverted raw share count, and multiplies the lot-based `volume`
+fallback by 100.
 
 Representative order payload:
 
