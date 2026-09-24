@@ -122,6 +122,7 @@ $leanArguments = @(
     "--environment", "live-qmt",
     "--detach",
     "--no-update",
+    "--extra-config", "map-file-provider", "QuantConnect.Brokerages.Qmt.QmtMapFileProvider",
     "--extra-docker-config", $escapedExtraDockerConfiguration
 )
 $currentStage = "lean-cli-deploy"

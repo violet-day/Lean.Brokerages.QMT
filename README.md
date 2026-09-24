@@ -50,6 +50,20 @@ QMT is the Brokerage name, not the LEAN market ID. Add China equities with:
 self.add_equity("600000", Resolution.MINUTE, market="china")
 ```
 
+`QmtMapFileProvider` keeps LEAN symbols in the readable QMT form such as
+`600000.SH` while resolving local China equity data from the existing six-digit
+directories and ZIP files. It discovers tickers from `equity/china/minute` and
+`equity/china/daily` at runtime, treats every discovered ticker as continuously
+valid from the China calendar coverage start through `DateTime.MaxValue`, and
+delegates every other market to `LocalDiskMapFileProvider`. Select it with:
+
+```text
+map-file-provider=QuantConnect.Brokerages.Qmt.QmtMapFileProvider
+```
+
+The provider intentionally does not model listing, delisting, or ticker-change
+history.
+
 `QmtMarket` owns the `china` market ID (`900`), Shanghai time zone,
 09:30–11:30/13:00–15:00 sessions, CNY quote/account currency, 0.01 price step,
 and 100-share default lot. Its embedded, versioned SH trading calendar currently
@@ -129,6 +143,7 @@ QuantConnect.QmtBrokerage/
   QmtBrokerage.cs             LEAN Brokerage and live-data adapter
   QmtBrokerageFactory.cs      LEAN factory/configuration wiring
   QmtBrokerageModel.cs        MVP order and security capabilities
+  QmtMapFileProvider.cs       Runtime full-symbol to local-data mapping
   QmtGatewayClient.cs         NDJSON TCP client
   QmtProtocol.cs              Protocol v1 DTOs
   QmtSymbolMapper.cs          China A-share/QMT code conversion
