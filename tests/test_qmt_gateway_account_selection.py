@@ -57,23 +57,41 @@ class QmtGatewayAccountSelectionTests(unittest.TestCase):
                 "injected-account",
             )
 
-    def test_detects_simulation_qmt_runtime(self):
-        simulation_runtime_path = (
-            "C:\\Program Files (x86)\\Broker QMT\\"
-            "\u4ea4\u6613\u7aef\u6a21\u62df\\bin.x64\\XtItClient.exe"
-        )
-        self.assertTrue(
-            self.gateway_module._is_simulation_runtime(
-                [simulation_runtime_path]
-            )
+    def test_classifies_configured_live_account(self):
+        self.assertFalse(
+            self.gateway_module._is_simulation_account("40800875")
         )
 
-    def test_does_not_classify_live_qmt_runtime_as_simulation(self):
-        self.assertFalse(
-            self.gateway_module._is_simulation_runtime(
-                [r"C:\Program Files (x86)\Broker QMT\bin.x64\XtItClient.exe"]
-            )
+    def test_defaults_other_accounts_to_simulation(self):
+        self.assertTrue(
+            self.gateway_module._is_simulation_account("simulation-account")
         )
+
+    def test_hello_exposes_account_classification(self):
+        for account_id, expected_is_simulation in (
+            ("40800875", False),
+            ("simulation-account", True),
+        ):
+            with self.subTest(account_id=account_id):
+                gateway = self.gateway_module.LeanQmtGateway(
+                    context_info=object(),
+                    account_id=account_id,
+                )
+                response = gateway._process_request(
+                    {
+                        "protocol_version": 1,
+                        "message_type": "request",
+                        "request_id": "account-classification-test",
+                        "operation": "hello",
+                        "payload": {"account_id": account_id},
+                    }
+                )
+
+                self.assertTrue(response["success"])
+                self.assertIs(
+                    expected_is_simulation,
+                    response["payload"]["is_simulation"],
+                )
 
 
 if __name__ == "__main__":
