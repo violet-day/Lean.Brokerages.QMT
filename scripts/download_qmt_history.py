@@ -18,6 +18,7 @@ from pathlib import Path
 PROTOCOL_VERSION = 1
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 QMT_TICKER_PATTERN = re.compile(r"^[0-9]{6}\.(SH|SZ|BJ)$")
+QMT_SHARES_PER_LOT = Decimal("100")
 
 
 def default_lean_data_root():
@@ -134,15 +135,30 @@ def scaled_price(price_value):
 
 
 def history_bars_with_share_volume(history_payload):
-    if history_payload.get("volume_unit") != "shares":
+    reported_volume_unit = history_payload.get("volume_unit")
+    if reported_volume_unit == "shares":
+        volume_multiplier = Decimal("1")
+    elif reported_volume_unit in (None, "lots"):
+        volume_multiplier = QMT_SHARES_PER_LOT
+    else:
         raise RuntimeError(
-            "QMT query_history volume unit must be shares, received %r"
-            % history_payload.get("volume_unit")
+            "QMT query_history returned unsupported volume unit: %r"
+            % reported_volume_unit
         )
     history_bars = history_payload.get("bars")
     if not isinstance(history_bars, list):
         raise RuntimeError("QMT query_history returned no bars list")
-    return history_bars
+
+    converted_history_bars = []
+    for history_bar in history_bars:
+        if not isinstance(history_bar, dict):
+            raise RuntimeError("QMT history bars must be JSON objects")
+        converted_history_bar = dict(history_bar)
+        converted_history_bar["volume"] = (
+            Decimal(str(history_bar.get("volume", 0))) * volume_multiplier
+        )
+        converted_history_bars.append(converted_history_bar)
+    return converted_history_bars
 
 
 def quantconnect_minute_rows(history_bars, trading_date):
@@ -361,6 +377,16 @@ def main():
             )
 
         history_bars = history_bars_with_share_volume(history_payload)
+        reported_volume_unit = history_payload.get("volume_unit")
+        write_evidence(
+            "normalize-volume",
+            "ok",
+            "reported_unit=%s multiplier=%s"
+            % (
+                reported_volume_unit or "lots(default)",
+                1 if reported_volume_unit == "shares" else 100,
+            ),
+        )
         quantconnect_rows = quantconnect_minute_rows(history_bars, trading_date)
         write_evidence(
             current_stage,
