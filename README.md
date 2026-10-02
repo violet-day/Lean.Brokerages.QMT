@@ -296,6 +296,27 @@ data root is `C:\Users\nemo\lean_project\data`; on macOS it is
 `192.168.50.135`, so only `--ticker` and `--date` are required. Use
 `--data-root` or `--host` only when overriding these defaults.
 
+Repair and backfill the local A Top Gainer T/T+1 minute data entirely through
+QMT, without the download server or an Internet market-data source:
+
+```bash
+uv run --locked python scripts/backfill_top_gainer_history.py \
+  --repair-local-data \
+  --plan
+
+uv run --locked python scripts/backfill_top_gainer_history.py \
+  --repair-local-data
+```
+
+Repair mode rewrites every target file once with QMT `volume` converted from
+lots to shares. It stores a versioned checkpoint at
+`~/Workspace/quant/lean-project/data/qmt-a-top-gainer-repair-state.tsv`, so
+`Ctrl-C` followed by the same command resumes instead of starting over. The
+terminal shows a `tqdm` progress bar. Per-file failures are written to
+`~/Workspace/quant/lean-project/data/qmt-backfill-failures.tsv` and do not stop
+the remaining downloads. QMT must already be logged in with the Gateway strategy
+running; the script never starts or operates the QMT client.
+
 ## One-time QMT Gateway setup
 
 QMT must be logged in and the Gateway strategy must be started manually. The
