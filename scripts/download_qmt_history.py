@@ -10,7 +10,7 @@ import sys
 import tempfile
 import uuid
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
@@ -162,19 +162,52 @@ def history_bars_with_share_volume(history_payload):
 
 
 def quantconnect_minute_rows(history_bars, trading_date):
-    bars_by_time = {}
+    source_bars_by_time = {}
     for history_bar in history_bars:
         if not isinstance(history_bar, dict):
             raise ValueError("QMT history bars must be JSON objects")
         bar_time = parse_qmt_time(history_bar.get("time"))
         if bar_time.date() == trading_date:
-            bars_by_time[bar_time] = history_bar
+            source_bars_by_time[bar_time] = history_bar
 
-    if not bars_by_time:
+    if not source_bars_by_time:
         raise ValueError(
             "QMT returned no minute bars for %s"
             % trading_date.strftime("%Y%m%d")
         )
+
+    bars_by_time = {}
+    for source_bar_time in sorted(source_bars_by_time):
+        history_bar = source_bars_by_time[source_bar_time]
+        source_time = source_bar_time.time()
+        is_end_time_labeled_market_bar = (
+            time(9, 31) <= source_time <= time(11, 30)
+            or time(13, 1) <= source_time <= time(15, 0)
+        )
+        bar_time = (
+            source_bar_time - timedelta(minutes=1)
+            if is_end_time_labeled_market_bar
+            else source_bar_time
+        )
+        previous_bar = bars_by_time.get(bar_time)
+        if previous_bar is None:
+            bars_by_time[bar_time] = dict(history_bar)
+            continue
+
+        bars_by_time[bar_time] = {
+            **previous_bar,
+            "high": max(
+                Decimal(str(previous_bar["high"])),
+                Decimal(str(history_bar["high"])),
+            ),
+            "low": min(
+                Decimal(str(previous_bar["low"])),
+                Decimal(str(history_bar["low"])),
+            ),
+            "close": history_bar["close"],
+            "volume": Decimal(str(previous_bar.get("volume", 0)))
+            + Decimal(str(history_bar.get("volume", 0))),
+        }
 
     quantconnect_rows = []
     for bar_time in sorted(bars_by_time):
