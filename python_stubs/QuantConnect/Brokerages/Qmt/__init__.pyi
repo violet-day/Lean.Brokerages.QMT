@@ -107,3 +107,14 @@ class QmtOrderProperties(QuantConnect.Orders.OrderProperties):
     def __init__(self) -> None: ...
 
     def clone(self) -> QuantConnect.Interfaces.IOrderProperties: ...
+
+
+class QmtOrderEventStore:
+    """Reads persisted QMT strategy entry times across live restarts."""
+
+    FILE_PATH: str
+
+    @staticmethod
+    def get_invested_at(
+        symbol: QuantConnect.Symbol,
+    ) -> typing.Optional[DateTime]: ...

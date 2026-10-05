@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -799,6 +800,28 @@ namespace QuantConnect.Brokerages.Qmt
             var fillStatus = leanOrder != null && cumulativeFilledQuantity >= leanOrder.AbsoluteQuantity
                 ? OrderStatus.Filled
                 : OrderStatus.PartiallyFilled;
+            if (fillStatus == OrderStatus.Filled &&
+                leanOrder?.Tag?.StartsWith("enter", StringComparison.Ordinal) == true)
+            {
+                var accountId = _gatewayClient.ServerInformation?.AccountId ?? string.Empty;
+                var investedAt = ParseQmtTime(deal.Time);
+                try
+                {
+                    QmtOrderEventStore.RecordInvestedAt(accountId, symbol, investedAt);
+                    Log.Trace(
+                        $"QmtBrokerage.HandleDeal(): investment_record=ok account_id={accountId} " +
+                        $"symbol={symbol.Value} invested_at={investedAt:O}");
+                }
+                catch (Exception error) when (
+                    error is IOException ||
+                    error is UnauthorizedAccessException ||
+                    error is ArgumentException)
+                {
+                    Log.Error(
+                        $"QmtBrokerage.HandleDeal(): investment_record=failed account_id={accountId} " +
+                        $"symbol={symbol.Value} error={error.GetType().Name}:{error.Message}");
+                }
+            }
             OnOrderEvent(new OrderEvent(
                 leanOrderId.Value,
                 symbol,

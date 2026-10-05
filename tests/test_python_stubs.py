@@ -28,6 +28,7 @@ class PythonStubTests(unittest.TestCase):
                 "QmtEquityMarketRules",
                 "QmtMarket",
                 "QmtMarketOrderStyle",
+                "QmtOrderEventStore",
                 "QmtOrderProperties",
                 "QmtSymbolMapper",
             },
@@ -154,6 +155,25 @@ class PythonStubTests(unittest.TestCase):
         self.assertEqual(
             {"__init__", "clone", "market_order_style"},
             order_property_method_names,
+        )
+
+        order_event_store_methods = {
+            node.name: node
+            for node in classes_by_name["QmtOrderEventStore"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {"get_invested_at"},
+            set(order_event_store_methods),
+        )
+        self.assertEqual(
+            ["staticmethod"],
+            [
+                ast.unparse(decorator)
+                for decorator in order_event_store_methods[
+                    "get_invested_at"
+                ].decorator_list
+            ],
         )
 
     def test_runtime_loader_references_qmt_assembly(self):
