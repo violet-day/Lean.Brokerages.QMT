@@ -196,6 +196,99 @@ class QmtGatewaySubscriptionTests(unittest.TestCase):
         with self.assertRaises(queue.Empty):
             gateway.get_queued_outgoing_message()
 
+    def test_prioritizes_response_over_quote_event_backlog(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="subscription-test",
+        )
+        for stock_code_number in range(300):
+            gateway._publish_event(
+                "quote",
+                {
+                    "stock_code": "%06d.SZ" % stock_code_number,
+                    "last_price": 10.5,
+                },
+            )
+        client_socket = object()
+        response_message = gateway._process_request(
+            {
+                "protocol_version": 1,
+                "message_type": "request",
+                "request_id": "response-priority-test",
+                "operation": "hello",
+                "payload": {"account_id": "subscription-test"},
+            }
+        )
+        gateway._queue_response(client_socket, response_message)
+
+        queued_target_socket, queued_message = (
+            gateway.get_queued_outgoing_message()
+        )
+        self.assertIs(client_socket, queued_target_socket)
+        self.assertEqual("response", queued_message["message_type"])
+        self.assertEqual(
+            "response-priority-test",
+            queued_message["request_id"],
+        )
+
+    def test_only_event_enabled_clients_receive_gateway_events(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="subscription-test",
+        )
+        event_client_socket = object()
+        query_client_socket = object()
+
+        gateway._process_request(
+            {
+                "protocol_version": 1,
+                "message_type": "request",
+                "request_id": "event-client-hello",
+                "operation": "hello",
+                "payload": {
+                    "account_id": "subscription-test",
+                    "receive_events": True,
+                },
+            },
+            event_client_socket,
+        )
+        gateway._process_request(
+            {
+                "protocol_version": 1,
+                "message_type": "request",
+                "request_id": "query-client-hello",
+                "operation": "hello",
+                "payload": {"account_id": "subscription-test"},
+            },
+            query_client_socket,
+        )
+
+        self.assertEqual({event_client_socket}, gateway._event_client_sockets)
+        gateway._remove_client(event_client_socket)
+        self.assertEqual(set(), gateway._event_client_sockets)
+
+    def test_rejects_non_boolean_event_delivery_request(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="subscription-test",
+        )
+
+        response = gateway._process_request(
+            {
+                "protocol_version": 1,
+                "message_type": "request",
+                "request_id": "invalid-event-client-hello",
+                "operation": "hello",
+                "payload": {
+                    "account_id": "subscription-test",
+                    "receive_events": "true",
+                },
+            }
+        )
+
+        self.assertFalse(response["success"])
+        self.assertEqual("INVALID_REQUEST", response["error_code"])
+
 
 if __name__ == "__main__":
     unittest.main()

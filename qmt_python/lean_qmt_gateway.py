@@ -7,6 +7,7 @@ threads.
 """
 
 import json
+import itertools
 import math
 import os
 import queue
@@ -50,6 +51,8 @@ REQUEST_PUMP_MARKET = "SH"
 QUOTE_POLL_INTERVAL_SECONDS = 30.0
 NETWORK_THREAD_HEARTBEAT_TIMEOUT_SECONDS = 5.0
 NETWORK_RECOVERY_RETRY_SECONDS = 5.0
+OUTGOING_RESPONSE_PRIORITY = 0
+OUTGOING_EVENT_PRIORITY = 1
 LIVE_ACCOUNT_IDS = frozenset(("40800875",))
 A_SHARE_SHARES_PER_LOT = 100
 MARKET_ORDER_SUBMISSIONS = {
@@ -852,7 +855,8 @@ class LeanQmtGateway(object):
         self.strategy_name = str(strategy_name or DEFAULT_STRATEGY_NAME)
 
         self._incoming_messages = queue.Queue()
-        self._outgoing_messages = queue.Queue()
+        self._outgoing_messages = queue.PriorityQueue()
+        self._outgoing_message_sequence = itertools.count()
         self._stop_event = threading.Event()
         self._server_socket = None
         self._accept_thread = None
@@ -860,6 +864,7 @@ class LeanQmtGateway(object):
         self._accept_loop_last_active_at = 0.0
         self._next_network_recovery_at = 0.0
         self._client_sockets = []
+        self._event_client_sockets = set()
         self._client_threads = []
         self._client_lock = threading.Lock()
         self._subscriptions_by_protocol_id = {}
@@ -1000,10 +1005,20 @@ class LeanQmtGateway(object):
         with self._client_lock:
             client_sockets = list(self._client_sockets)
             self._client_sockets = []
+            self._event_client_sockets.clear()
         for client_socket in client_sockets:
             self._close_socket(client_socket)
 
-        self._outgoing_messages.put((None, None))
+        self._outgoing_messages.put(
+            (
+                OUTGOING_RESPONSE_PRIORITY,
+                next(self._outgoing_message_sequence),
+                time.monotonic(),
+                0,
+                None,
+                None,
+            )
+        )
         network_threads = [self._accept_thread, self._sender_thread]
         network_threads.extend(self._client_threads)
         for network_thread in network_threads:
@@ -1015,7 +1030,8 @@ class LeanQmtGateway(object):
         self._accept_loop_last_active_at = 0.0
         self.bound_port = None
         self._incoming_messages = queue.Queue()
-        self._outgoing_messages = queue.Queue()
+        self._outgoing_messages = queue.PriorityQueue()
+        self._outgoing_message_sequence = itertools.count()
 
     def handlebar(self):
         if not self.recover_network_server_if_needed():
@@ -1028,8 +1044,11 @@ class LeanQmtGateway(object):
             except queue.Empty:
                 break
 
-            response_message = self._process_request(request_message)
-            self._outgoing_messages.put((client_socket, response_message))
+            response_message = self._process_request(
+                request_message,
+                client_socket,
+            )
+            self._queue_response(client_socket, response_message)
             processed_request_count += 1
 
         if processed_request_count:
@@ -1232,7 +1251,10 @@ class LeanQmtGateway(object):
 
     def get_queued_outgoing_message(self):
         """Return one queued message; intended for tests before ``start``."""
-        return self._outgoing_messages.get_nowait()
+        _, _, _, _, target_socket, message = (
+            self._outgoing_messages.get_nowait()
+        )
+        return target_socket, message
 
     def _accept_connections(self):
         while not self._stop_event.is_set():
@@ -1311,7 +1333,14 @@ class LeanQmtGateway(object):
     def _send_messages(self):
         while not self._stop_event.is_set():
             try:
-                target_socket, message = self._outgoing_messages.get(timeout=0.25)
+                (
+                    message_priority,
+                    _,
+                    enqueued_at,
+                    backlog_before_enqueue,
+                    target_socket,
+                    message,
+                ) = self._outgoing_messages.get(timeout=0.25)
             except queue.Empty:
                 continue
             if message is None:
@@ -1333,15 +1362,61 @@ class LeanQmtGateway(object):
 
             if target_socket is None:
                 with self._client_lock:
-                    target_sockets = list(self._client_sockets)
+                    target_sockets = list(self._event_client_sockets)
             else:
                 target_sockets = [target_socket]
 
+            sent_count = 0
             for client_socket in target_sockets:
                 try:
                     client_socket.sendall(encoded_message)
+                    sent_count += 1
                 except Exception:
                     self._remove_client(client_socket)
+
+            if (
+                message_priority == OUTGOING_RESPONSE_PRIORITY
+                and backlog_before_enqueue
+            ):
+                _log(
+                    "response_sent",
+                    backlog=backlog_before_enqueue,
+                    delay_milliseconds=int(
+                        (time.monotonic() - enqueued_at) * 1000
+                    ),
+                    operation=message.get("operation", ""),
+                    recipients=sent_count,
+                    request_id=message.get("request_id", ""),
+                )
+
+    def _queue_outgoing_message(self, priority, target_socket, message):
+        outgoing_backlog_count = self._outgoing_messages.qsize()
+        self._outgoing_messages.put(
+            (
+                priority,
+                next(self._outgoing_message_sequence),
+                time.monotonic(),
+                outgoing_backlog_count,
+                target_socket,
+                message,
+            )
+        )
+        return outgoing_backlog_count
+
+    def _queue_response(self, client_socket, response_message):
+        outgoing_backlog_count = self._queue_outgoing_message(
+            OUTGOING_RESPONSE_PRIORITY,
+            client_socket,
+            response_message,
+        )
+        if outgoing_backlog_count:
+            _log(
+                "response_queued",
+                backlog=outgoing_backlog_count,
+                operation=response_message.get("operation", ""),
+                priority="response",
+                request_id=response_message.get("request_id", ""),
+            )
 
     def _queue_network_error(self, client_socket, error_code, error_message):
         response_message = _protocol_message(
@@ -1353,7 +1428,7 @@ class LeanQmtGateway(object):
             error_message,
             {},
         )
-        self._outgoing_messages.put((client_socket, response_message))
+        self._queue_response(client_socket, response_message)
 
     def _remove_client(self, client_socket):
         removed = False
@@ -1361,6 +1436,7 @@ class LeanQmtGateway(object):
             if client_socket in self._client_sockets:
                 self._client_sockets.remove(client_socket)
                 removed = True
+            self._event_client_sockets.discard(client_socket)
         self._close_socket(client_socket)
         if removed:
             _log("client_disconnected")
@@ -1376,7 +1452,7 @@ class LeanQmtGateway(object):
         except Exception:
             pass
 
-    def _process_request(self, request_message):
+    def _process_request(self, request_message, client_socket=None):
         if not isinstance(request_message, dict):
             return _protocol_message(
                 "response",
@@ -1393,6 +1469,11 @@ class LeanQmtGateway(object):
         cached_response = self._cached_responses.get(request_id)
         if request_id and cached_response is not None:
             _log("duplicate_request", operation=operation, request_id=request_id)
+            self._configure_event_delivery(
+                client_socket,
+                request_message,
+                cached_response,
+            )
             return cached_response
 
         try:
@@ -1443,7 +1524,34 @@ class LeanQmtGateway(object):
 
         if request_id:
             self._cache_response(request_id, response_message)
+        self._configure_event_delivery(
+            client_socket,
+            request_message,
+            response_message,
+        )
         return response_message
+
+    def _configure_event_delivery(
+        self,
+        client_socket,
+        request_message,
+        response_message,
+    ):
+        if (
+            client_socket is None
+            or request_message.get("operation") != "hello"
+            or response_message.get("success") is not True
+        ):
+            return
+        receive_events = (
+            request_message.get("payload") or {}
+        ).get("receive_events") is True
+        with self._client_lock:
+            if receive_events:
+                self._event_client_sockets.add(client_socket)
+            else:
+                self._event_client_sockets.discard(client_socket)
+        _log("client_event_delivery", enabled=receive_events)
 
     @staticmethod
     def _validate_request_envelope(request_message):
@@ -1477,6 +1585,12 @@ class LeanQmtGateway(object):
     def _execute_operation(self, operation, payload):
         if operation == "hello":
             requested_account_id = str(payload.get("account_id") or "").strip()
+            receive_events = payload.get("receive_events", False)
+            if not isinstance(receive_events, bool):
+                raise _RequestError(
+                    "INVALID_REQUEST",
+                    "receive_events must be a boolean.",
+                )
             if requested_account_id and requested_account_id != self.account_id:
                 raise _RequestError(
                     "ACCOUNT_MISMATCH",
@@ -2010,7 +2124,11 @@ class LeanQmtGateway(object):
             "",
             payload,
         )
-        self._outgoing_messages.put((None, event_message))
+        self._queue_outgoing_message(
+            OUTGOING_EVENT_PRIORITY,
+            None,
+            event_message,
+        )
 
     def _cache_response(self, request_id, response_message):
         self._cached_responses[request_id] = response_message

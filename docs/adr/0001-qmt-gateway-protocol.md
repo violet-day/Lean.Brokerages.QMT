@@ -39,7 +39,7 @@ The C# client rejects messages whose `protocol_version` is not `1`. It keeps the
 Immediately after opening TCP, the client sends:
 
 ```json
-{"protocol_version":1,"message_type":"request","request_id":"...","operation":"hello","payload":{"account_id":"86033767"}}
+{"protocol_version":1,"message_type":"request","request_id":"...","operation":"hello","payload":{"account_id":"86033767","receive_events":true}}
 ```
 
 The server responds with:
@@ -51,6 +51,11 @@ The server responds with:
 An empty request `account_id` discovers the current Gateway account; the response
 must still contain a non-empty `account_id`. When the client supplies an expected
 account, it compares the returned value and aborts on mismatch.
+
+`receive_events` is optional and defaults to `false`. The Brokerage connection
+sets it to `true`; short-lived account, order, and position query connections
+leave it disabled so quote and account event traffic cannot delay their
+responses.
 
 The Gateway never starts, stops, logs into, or restarts QMT. An operator starts QMT and the imported Python strategy manually.
 

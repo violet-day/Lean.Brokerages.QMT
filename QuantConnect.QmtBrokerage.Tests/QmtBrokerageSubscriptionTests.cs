@@ -62,6 +62,79 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             });
         }
 
+        [Test]
+        public void ProducesMinuteTradeBarForMinuteTradeBarSubscription()
+        {
+            var subscriptionIdentifier = SecurityIdentifier.GenerateEquity(
+                SecurityIdentifier.DefaultDate,
+                "600000.SH",
+                QmtSymbolMapper.MarketName);
+            var subscriptionSymbol = new Symbol(subscriptionIdentifier, "600000.SH");
+            var subscriptionConfiguration = new SubscriptionDataConfig(
+                typeof(TradeBar),
+                subscriptionSymbol,
+                Resolution.Minute,
+                TimeZones.Shanghai,
+                TimeZones.Shanghai,
+                false,
+                false,
+                false,
+                false,
+                TickType.Trade);
+            using var gatewayClient = new QmtSubscriptionTestGatewayClient();
+            using var brokerage = new QmtBrokerage(gatewayClient, new QmtOrderTestProvider());
+            using var dataAvailable = new ManualResetEventSlim(false);
+            using var enumerator = brokerage.Subscribe(
+                subscriptionConfiguration,
+                (_, _) => dataAvailable.Set());
+
+            gatewayClient.EmitQuoteEvent(new QmtQuoteEventPayload
+            {
+                StockCode = "600000.SH",
+                Time = "20260824093001",
+                LastPrice = 9.20m,
+                Volume = 1000m,
+                VolumeUnit = "shares"
+            });
+            gatewayClient.EmitQuoteEvent(new QmtQuoteEventPayload
+            {
+                StockCode = "600000.SH",
+                Time = "20260824093030",
+                LastPrice = 9.25m,
+                Volume = 1300m,
+                VolumeUnit = "shares"
+            });
+            gatewayClient.EmitQuoteEvent(new QmtQuoteEventPayload
+            {
+                StockCode = "600000.SH",
+                Time = "20260824093101",
+                LastPrice = 9.23m,
+                Volume = 1500m,
+                VolumeUnit = "shares"
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(dataAvailable.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                Assert.That(enumerator, Is.Not.Null);
+                Assert.That(enumerator!.MoveNext(), Is.True);
+                Assert.That(enumerator.Current, Is.TypeOf<TradeBar>());
+            });
+
+            var tradeBar = (TradeBar)enumerator!.Current;
+            Assert.Multiple(() =>
+            {
+                Assert.That(tradeBar.Symbol, Is.EqualTo(subscriptionSymbol));
+                Assert.That(tradeBar.Time, Is.EqualTo(new DateTime(2026, 8, 24, 9, 30, 0)));
+                Assert.That(tradeBar.EndTime, Is.EqualTo(new DateTime(2026, 8, 24, 9, 31, 0)));
+                Assert.That(tradeBar.Open, Is.EqualTo(9.20m));
+                Assert.That(tradeBar.High, Is.EqualTo(9.25m));
+                Assert.That(tradeBar.Low, Is.EqualTo(9.20m));
+                Assert.That(tradeBar.Close, Is.EqualTo(9.25m));
+                Assert.That(tradeBar.Volume, Is.EqualTo(300m));
+            });
+        }
+
         private sealed class QmtSubscriptionTestGatewayClient : IQmtGatewayClient
         {
             public bool IsConnected { get; private set; } = true;

@@ -1,3 +1,4 @@
+import datetime
 from enum import IntEnum
 import typing
 
@@ -55,6 +56,41 @@ class QmtMarket:
 
     @staticmethod
     def ensure_calendar_covers(date: DateTime) -> None: ...
+
+
+class QmtEquityMarketRules:
+    """Defines exchange and board-specific rules for QMT A-share equities."""
+
+    @staticmethod
+    def get_minimum_buy_order_quantity(symbol: QuantConnect.Symbol) -> float: ...
+
+    @staticmethod
+    def get_daily_price_limit_percentage(symbol: QuantConnect.Symbol) -> float: ...
+
+
+class QmtSymbolMapper(QuantConnect.Brokerages.ISymbolMapper):
+    """Maps LEAN equity symbols to QMT stock codes."""
+
+    MARKET_NAME: str
+    registered_market_name: str
+
+    def __init__(self) -> None: ...
+
+    def get_brokerage_symbol(self, symbol: QuantConnect.Symbol) -> str: ...
+
+    def get_lean_symbol_from_exchange(
+        self, ticker: str, exchange: str
+    ) -> QuantConnect.Symbol: ...
+
+    def get_lean_symbol(
+        self,
+        brokerage_symbol: str,
+        security_type: QuantConnect.SecurityType,
+        market: str,
+        expiration_date: typing.Union[datetime.datetime, datetime.date] = ...,
+        strike: float = 0,
+        option_right: QuantConnect.OptionRight = 0,
+    ) -> QuantConnect.Symbol: ...
 
 
 class QmtOrderProperties(QuantConnect.Orders.OrderProperties):

@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -10,6 +9,7 @@ using Newtonsoft.Json;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
 using QuantConnect.Interfaces;
+using QuantConnect.Lean.Engine.DataFeeds;
 using QuantConnect.Logging;
 using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
@@ -41,6 +41,7 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IQmtGatewayClient _gatewayClient;
         private readonly IOrderProvider _orderProvider;
         private readonly QmtSymbolMapper _symbolMapper;
+        private readonly IDataAggregator _dataAggregator = new AggregationManager();
         private readonly ITimeProvider _timeProvider;
         private readonly TimeSpan? _reconnectIntervalOverride;
         private readonly object _reconnectLock = new object();
@@ -216,6 +217,9 @@ namespace QuantConnect.Brokerages.Qmt
                 StartTime = request.StartTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
                 EndTime = request.EndTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
             });
+            var barPeriod = request.Resolution == Resolution.Daily
+                ? TimeSpan.FromDays(1)
+                : TimeSpan.FromMinutes(1);
             var historyPayload = response.ToPayload<QmtQueryHistoryPayload>();
             if (!string.Equals(historyPayload.VolumeUnit, "shares", StringComparison.Ordinal))
             {
@@ -223,15 +227,22 @@ namespace QuantConnect.Brokerages.Qmt
                     $"QMT history volume unit must be shares, received '{historyPayload.VolumeUnit}'.");
             }
             var bars = historyPayload.Bars
-                .Select(bar => (BaseData)new TradeBar(
-                    ParseQmtTime(bar.Time),
-                    request.Symbol,
-                    bar.Open,
-                    bar.High,
-                    bar.Low,
-                    bar.Close,
-                    bar.Volume,
-                    request.Resolution == Resolution.Daily ? TimeSpan.FromDays(1) : TimeSpan.FromMinutes(1)))
+                .Select(bar =>
+                {
+                    var qmtBarTime = ParseQmtTime(bar.Time);
+                    var barStartTime = request.Resolution == Resolution.Minute
+                        ? qmtBarTime.Subtract(barPeriod)
+                        : qmtBarTime;
+                    return (BaseData)new TradeBar(
+                        barStartTime,
+                        request.Symbol,
+                        bar.Open,
+                        bar.High,
+                        bar.Low,
+                        bar.Close,
+                        bar.Volume,
+                        barPeriod);
+                })
                 .OrderBy(bar => bar.Time)
                 .ToList();
             Log.Trace(
@@ -464,6 +475,10 @@ namespace QuantConnect.Brokerages.Qmt
 
             if (!CanSubscribe(dataConfig))
             {
+                Log.Trace(
+                    $"QmtBrokerage.Subscribe(): status=unsupported symbol={dataConfig.Symbol.Value} " +
+                    $"data_type={dataConfig.Type.Name} resolution={dataConfig.Resolution} " +
+                    $"tick_type={dataConfig.TickType}");
                 return null;
             }
 
@@ -483,11 +498,12 @@ namespace QuantConnect.Brokerages.Qmt
                     }
                     Log.Trace(
                         $"QmtBrokerage.Subscribe(): status=ok symbol={dataConfig.Symbol.Value} stock_code={stockCode} " +
-                        $"subscription_id={result.SubscriptionId}");
+                        $"subscription_id={result.SubscriptionId} data_type={dataConfig.Type.Name} " +
+                        $"resolution={dataConfig.Resolution} tick_type={dataConfig.TickType}");
                     return new SubscriptionState(result.SubscriptionId, dataConfig.Symbol);
                 });
             Interlocked.Increment(ref subscriptionState.ReferenceCount);
-            return subscriptionState.CreateEnumerator(dataConfig.TickType, newDataAvailableHandler);
+            return _dataAggregator.Add(dataConfig, newDataAvailableHandler);
         }
 
         public void Unsubscribe(SubscriptionDataConfig dataConfig)
@@ -503,6 +519,7 @@ namespace QuantConnect.Brokerages.Qmt
                 return;
             }
 
+            _dataAggregator.Remove(dataConfig);
             if (Interlocked.Decrement(ref subscriptionState.ReferenceCount) > 0)
             {
                 return;
@@ -511,19 +528,12 @@ namespace QuantConnect.Brokerages.Qmt
             if (_subscriptions.TryRemove(brokerageStockCode, out var removedState))
             {
                 var subscriptionId = removedState.Deactivate();
-                try
-                {
-                    SendRequest(
-                        QmtProtocol.Operations.Unsubscribe,
-                        new QmtUnsubscribeRequest { SubscriptionId = subscriptionId });
-                    Log.Trace(
-                        $"QmtBrokerage.Unsubscribe(): status=ok symbol={dataConfig.Symbol.Value} " +
-                        $"subscription_id={subscriptionId}");
-                }
-                finally
-                {
-                    removedState.Dispose();
-                }
+                SendRequest(
+                    QmtProtocol.Operations.Unsubscribe,
+                    new QmtUnsubscribeRequest { SubscriptionId = subscriptionId });
+                Log.Trace(
+                    $"QmtBrokerage.Unsubscribe(): status=ok symbol={dataConfig.Symbol.Value} " +
+                    $"subscription_id={subscriptionId}");
             }
         }
 
@@ -542,11 +552,8 @@ namespace QuantConnect.Brokerages.Qmt
             CancelReconnectLoop();
             _gatewayClient.EventReceived -= HandleGatewayEvent;
             _gatewayClient.Disconnected -= HandleGatewayDisconnected;
-            foreach (var subscriptionState in _subscriptions.Values)
-            {
-                subscriptionState.Dispose();
-            }
             _subscriptions.Clear();
+            _dataAggregator.Dispose();
             _gatewayClient.Dispose();
             base.Dispose();
         }
@@ -648,11 +655,12 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 Value = quote.LastPrice
             };
-            subscriptionState.Publish(tradeTick);
-            subscriptionState.Publish(quoteTick);
+            _dataAggregator.Update(tradeTick);
+            _dataAggregator.Update(quoteTick);
             Log.Trace(
                 $"QmtBrokerage.HandleQuote(): status=published symbol={symbol.Value} time={localTime:O} " +
-                $"last={quote.LastPrice} cumulative_volume={quote.Volume} trade_quantity={tradeQuantity}");
+                $"last={quote.LastPrice} cumulative_volume={quote.Volume} trade_quantity={tradeQuantity} " +
+                "published_types=TradeTick,QuoteTick");
         }
 
         private void HandleOrder(QmtOrderEventPayload orderUpdate)
@@ -880,7 +888,15 @@ namespace QuantConnect.Brokerages.Qmt
         {
             return dataConfig.Symbol.SecurityType == SecurityType.Equity &&
                 string.Equals(dataConfig.Symbol.ID.Market, QmtSymbolMapper.MarketName, StringComparison.OrdinalIgnoreCase) &&
-                (dataConfig.TickType == TickType.Trade || dataConfig.TickType == TickType.Quote);
+                ((dataConfig.Type == typeof(Tick) &&
+                    dataConfig.Resolution == Resolution.Tick &&
+                    (dataConfig.TickType == TickType.Trade || dataConfig.TickType == TickType.Quote)) ||
+                (dataConfig.Type == typeof(TradeBar) &&
+                    dataConfig.Resolution == Resolution.Minute &&
+                    dataConfig.TickType == TickType.Trade) ||
+                (dataConfig.Type == typeof(QuoteBar) &&
+                    dataConfig.Resolution == Resolution.Minute &&
+                    dataConfig.TickType == TickType.Quote));
         }
 
         private static OrderDirection ParseDirection(string direction)
@@ -1313,14 +1329,11 @@ namespace QuantConnect.Brokerages.Qmt
             }
         }
 
-        private sealed class SubscriptionState : IDisposable
+        private sealed class SubscriptionState
         {
-            private readonly ConcurrentDictionary<int, MarketDataEnumerator> _enumerators =
-                new ConcurrentDictionary<int, MarketDataEnumerator>();
             private readonly object _subscriptionLock = new object();
             private string _subscriptionId;
             private bool _isActive = true;
-            private int _nextEnumeratorId;
             public int ReferenceCount;
             public Symbol Symbol { get; }
 
@@ -1362,99 +1375,6 @@ namespace QuantConnect.Brokerages.Qmt
                     _isActive = false;
                     return _subscriptionId;
                 }
-            }
-
-            public IEnumerator<BaseData> CreateEnumerator(TickType tickType, EventHandler newDataAvailableHandler)
-            {
-                var enumeratorId = Interlocked.Increment(ref _nextEnumeratorId);
-                var enumerator = new MarketDataEnumerator(
-                    tickType,
-                    newDataAvailableHandler,
-                    () => _enumerators.TryRemove(enumeratorId, out _));
-                _enumerators[enumeratorId] = enumerator;
-                return enumerator;
-            }
-
-            public void Publish(BaseData data)
-            {
-                foreach (var enumerator in _enumerators.Values)
-                {
-                    if (data is Tick tick && tick.TickType == enumerator.TickType)
-                    {
-                        enumerator.Enqueue(data.Clone());
-                    }
-                }
-            }
-
-            public void Dispose()
-            {
-                Deactivate();
-                foreach (var enumerator in _enumerators.Values)
-                {
-                    enumerator.Dispose();
-                }
-                _enumerators.Clear();
-            }
-        }
-
-        private sealed class MarketDataEnumerator : IEnumerator<BaseData>
-        {
-            private readonly BlockingCollection<BaseData> _queue = new BlockingCollection<BaseData>();
-            private readonly EventHandler? _newDataAvailableHandler;
-            private readonly Action _removeEnumerator;
-            private int _isDisposed;
-
-            public TickType TickType { get; }
-
-            public BaseData Current { get; private set; } = null!;
-            object IEnumerator.Current => Current;
-
-            public MarketDataEnumerator(
-                TickType tickType,
-                EventHandler? newDataAvailableHandler,
-                Action removeEnumerator)
-            {
-                TickType = tickType;
-                _newDataAvailableHandler = newDataAvailableHandler;
-                _removeEnumerator = removeEnumerator;
-            }
-
-            public void Enqueue(BaseData data)
-            {
-                if (Volatile.Read(ref _isDisposed) == 1)
-                {
-                    return;
-                }
-                _queue.Add(data);
-                _newDataAvailableHandler?.Invoke(this, EventArgs.Empty);
-            }
-
-            public bool MoveNext()
-            {
-                if (_queue.TryTake(out var nextData))
-                {
-                    Current = nextData;
-                    return true;
-                }
-
-                Current = null!;
-                return !_queue.IsCompleted;
-            }
-
-            public void Reset()
-            {
-                throw new NotSupportedException();
-            }
-
-            public void Dispose()
-            {
-                if (Interlocked.Exchange(ref _isDisposed, 1) == 1)
-                {
-                    return;
-                }
-                _queue.CompleteAdding();
-                _removeEnumerator();
-                _queue.Dispose();
             }
         }
 

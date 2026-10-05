@@ -25,9 +25,11 @@ class PythonStubTests(unittest.TestCase):
         self.assertEqual(
             {
                 "QmtBrokerageModel",
+                "QmtEquityMarketRules",
                 "QmtMarket",
                 "QmtMarketOrderStyle",
                 "QmtOrderProperties",
+                "QmtSymbolMapper",
             },
             set(classes_by_name),
         )
@@ -100,6 +102,48 @@ class PythonStubTests(unittest.TestCase):
                 "ensure_calendar_covers",
             },
             market_method_names,
+        )
+
+        equity_market_rule_methods = {
+            node.name: node
+            for node in classes_by_name["QmtEquityMarketRules"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {
+                "get_daily_price_limit_percentage",
+                "get_minimum_buy_order_quantity",
+            },
+            set(equity_market_rule_methods),
+        )
+        self.assertTrue(
+            all(
+                [ast.unparse(decorator) for decorator in method.decorator_list]
+                == ["staticmethod"]
+                for method in equity_market_rule_methods.values()
+            )
+        )
+
+        symbol_mapper_method_names = {
+            node.name
+            for node in classes_by_name["QmtSymbolMapper"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {
+                "__init__",
+                "get_brokerage_symbol",
+                "get_lean_symbol",
+                "get_lean_symbol_from_exchange",
+            },
+            symbol_mapper_method_names,
+        )
+        self.assertEqual(
+            {"QuantConnect.Brokerages.ISymbolMapper"},
+            {
+                ast.unparse(base)
+                for base in classes_by_name["QmtSymbolMapper"].bases
+            },
         )
 
         order_property_method_names = {

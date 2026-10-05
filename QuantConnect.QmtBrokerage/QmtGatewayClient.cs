@@ -141,7 +141,11 @@ namespace QuantConnect.Brokerages.Qmt
 
                     var helloResponse = await SendRequestAsync(
                         QmtProtocol.Operations.Hello,
-                        new QmtHelloRequest { AccountId = _expectedAccountId ?? string.Empty },
+                        new QmtHelloRequest
+                        {
+                            AccountId = _expectedAccountId ?? string.Empty,
+                            ReceiveEvents = true
+                        },
                         cancellationToken).ConfigureAwait(false);
                     if (helloResponse.Payload.Property("account_id", StringComparison.Ordinal) == null)
                     {

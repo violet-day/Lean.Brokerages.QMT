@@ -95,6 +95,9 @@ namespace QuantConnect.Brokerages.Qmt
     {
         [JsonProperty("account_id")]
         public string AccountId { get; set; } = string.Empty;
+
+        [JsonProperty("receive_events")]
+        public bool ReceiveEvents { get; set; }
     }
 
     public sealed class QmtHelloPayload
