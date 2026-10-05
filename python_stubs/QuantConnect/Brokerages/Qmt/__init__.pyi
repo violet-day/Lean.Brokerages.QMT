@@ -110,7 +110,7 @@ class QmtOrderProperties(QuantConnect.Orders.OrderProperties):
 
 
 class QmtOrderEventStore:
-    """Reads persisted QMT strategy entry times across live restarts."""
+    """Rebuilds current-position opening times from persisted QMT deals."""
 
     FILE_PATH: str
 

@@ -30,51 +30,120 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         }
 
         [Test]
-        public void ReturnsLatestInvestmentForMatchingAccountAndSymbol()
+        public void ReturnsFirstBuyTimeOfCurrentOpenPosition()
         {
             var symbol = CreateSymbol("603565.SH");
             var otherSymbol = CreateSymbol("600000.SH");
-            var firstInvestmentTime = new DateTime(2026, 8, 24, 10, 1, 2);
-            var latestInvestmentTime = new DateTime(2026, 9, 18, 9, 35, 4);
+            var openingTime = new DateTime(2026, 8, 24, 10, 1, 2);
 
-            QmtOrderEventStore.RecordInvestedAt(
+            QmtOrderEventStore.RecordDeal(
                 _recordFilePath,
                 "account-1",
+                "deal-1",
                 symbol,
-                firstInvestmentTime);
-            QmtOrderEventStore.RecordInvestedAt(
+                openingTime,
+                100m);
+            QmtOrderEventStore.RecordDeal(
                 _recordFilePath,
                 "account-2",
+                "deal-2",
                 symbol,
-                latestInvestmentTime.AddDays(-1));
-            QmtOrderEventStore.RecordInvestedAt(
+                openingTime.AddMinutes(1),
+                100m);
+            QmtOrderEventStore.RecordDeal(
                 _recordFilePath,
                 "account-1",
+                "deal-3",
                 otherSymbol,
-                latestInvestmentTime.AddHours(-1));
-            QmtOrderEventStore.RecordInvestedAt(
+                openingTime.AddMinutes(2),
+                100m);
+            QmtOrderEventStore.RecordDeal(
                 _recordFilePath,
                 "account-1",
+                "deal-4",
                 symbol,
-                latestInvestmentTime);
+                openingTime.AddMinutes(3),
+                200m);
+            QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-5",
+                symbol,
+                openingTime.AddDays(1),
+                -200m);
 
             var investedAt = QmtOrderEventStore.GetInvestedAt(
                 _recordFilePath,
                 "account-1",
                 symbol);
 
-            Assert.That(investedAt, Is.EqualTo(latestInvestmentTime));
+            Assert.That(investedAt, Is.EqualTo(openingTime));
         }
 
         [Test]
-        public void ReturnsNullWhenNoInvestmentWasRecorded()
+        public void ResetsInvestmentTimeAfterPositionIsClosed()
         {
+            var symbol = CreateSymbol("603565.SH");
+            var firstOpeningTime = new DateTime(2026, 8, 24, 10, 1, 2);
+            var secondOpeningTime = new DateTime(2026, 9, 18, 9, 35, 4);
+
+            QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-1",
+                symbol,
+                firstOpeningTime,
+                100m);
+            QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-2",
+                symbol,
+                firstOpeningTime.AddDays(1),
+                -100m);
+            QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-3",
+                symbol,
+                secondOpeningTime,
+                100m);
+
             var investedAt = QmtOrderEventStore.GetInvestedAt(
                 _recordFilePath,
                 "account-1",
-                CreateSymbol("603565.SH"));
+                symbol);
 
-            Assert.That(investedAt, Is.Null);
+            Assert.That(investedAt, Is.EqualTo(secondOpeningTime));
+        }
+
+        [Test]
+        public void IgnoresDuplicateDeal()
+        {
+            var symbol = CreateSymbol("603565.SH");
+            var openingTime = new DateTime(2026, 8, 24, 10, 1, 2);
+
+            var firstRecordAdded = QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-1",
+                symbol,
+                openingTime,
+                100m);
+            var duplicateRecordAdded = QmtOrderEventStore.RecordDeal(
+                _recordFilePath,
+                "account-1",
+                "deal-1",
+                symbol,
+                openingTime,
+                100m);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(firstRecordAdded, Is.True);
+                Assert.That(duplicateRecordAdded, Is.False);
+                Assert.That(File.ReadLines(_recordFilePath), Has.Exactly(1).Items);
+            });
         }
 
         private static Symbol CreateSymbol(string brokerageSymbol)

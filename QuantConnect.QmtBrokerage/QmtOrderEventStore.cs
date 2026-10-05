@@ -8,7 +8,7 @@ using QuantConnect.Logging;
 namespace QuantConnect.Brokerages.Qmt
 {
     /// <summary>
-    /// Persists completed strategy entry events so their investment time survives a restart.
+    /// Persists QMT deals and rebuilds the opening time of the current position.
     /// </summary>
     public static class QmtOrderEventStore
     {
@@ -36,27 +36,47 @@ namespace QuantConnect.Brokerages.Qmt
             }
         }
 
-        internal static void RecordInvestedAt(
+        internal static bool RecordDeal(
             string accountId,
+            string dealId,
             Symbol symbol,
-            DateTime investedAt)
+            DateTime filledAt,
+            decimal fillQuantity)
         {
-            RecordInvestedAt(FilePath, accountId, symbol, investedAt);
+            return RecordDeal(
+                FilePath,
+                accountId,
+                dealId,
+                symbol,
+                filledAt,
+                fillQuantity);
         }
 
-        internal static void RecordInvestedAt(
+        internal static bool RecordDeal(
             string filePath,
             string accountId,
+            string dealId,
             Symbol symbol,
-            DateTime investedAt)
+            DateTime filledAt,
+            decimal fillQuantity)
         {
             if (string.IsNullOrWhiteSpace(accountId))
             {
                 throw new ArgumentException("QMT account ID is required.", nameof(accountId));
             }
+            if (string.IsNullOrWhiteSpace(dealId))
+            {
+                throw new ArgumentException("QMT deal ID is required.", nameof(dealId));
+            }
             if (symbol == null)
             {
                 throw new ArgumentNullException(nameof(symbol));
+            }
+            if (fillQuantity == 0m)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(fillQuantity),
+                    "QMT fill quantity cannot be zero.");
             }
 
             var directoryPath = Path.GetDirectoryName(filePath);
@@ -64,17 +84,39 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 Directory.CreateDirectory(directoryPath);
             }
-            var record = new InvestmentRecord
+            var record = new DealRecord
             {
                 AccountId = accountId.Trim(),
+                DealId = dealId.Trim(),
                 Symbol = symbol.Value.ToUpperInvariant(),
-                InvestedAt = investedAt.ToString("O", CultureInfo.InvariantCulture)
+                FilledAt = filledAt.ToString("O", CultureInfo.InvariantCulture),
+                FillQuantity = fillQuantity
             };
             var line = JsonConvert.SerializeObject(record) + Environment.NewLine;
             lock (FileLock)
             {
+                if (File.Exists(filePath))
+                {
+                    foreach (var existingLine in File.ReadLines(filePath))
+                    {
+                        var existingRecord = DeserializeRecord(existingLine);
+                        if (existingRecord != null &&
+                            string.Equals(
+                                existingRecord.AccountId,
+                                record.AccountId,
+                                StringComparison.Ordinal) &&
+                            string.Equals(
+                                existingRecord.DealId,
+                                record.DealId,
+                                StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+                    }
+                }
                 File.AppendAllText(filePath, line);
             }
+            return true;
         }
 
         internal static DateTime? GetInvestedAt(
@@ -87,48 +129,69 @@ namespace QuantConnect.Brokerages.Qmt
                 return null;
             }
 
+            var positionQuantity = 0m;
             DateTime? investedAt = null;
             lock (FileLock)
             {
                 foreach (var line in File.ReadLines(filePath))
                 {
-                    InvestmentRecord? record;
-                    try
-                    {
-                        record = JsonConvert.DeserializeObject<InvestmentRecord>(line);
-                    }
-                    catch (JsonException)
-                    {
-                        continue;
-                    }
+                    var record = DeserializeRecord(line);
                     if (record == null ||
                         !string.Equals(record.AccountId, accountId, StringComparison.Ordinal) ||
                         !string.Equals(record.Symbol, symbol.Value, StringComparison.OrdinalIgnoreCase) ||
                         !DateTime.TryParseExact(
-                            record.InvestedAt,
+                            record.FilledAt,
                             "O",
                             CultureInfo.InvariantCulture,
                             DateTimeStyles.RoundtripKind,
-                            out var recordedInvestedAt))
+                            out var filledAt))
                     {
                         continue;
                     }
-                    investedAt = recordedInvestedAt;
+
+                    var quantityAfterFill = positionQuantity + record.FillQuantity;
+                    if (positionQuantity == 0m && quantityAfterFill > 0m)
+                    {
+                        investedAt = filledAt;
+                    }
+                    positionQuantity = Math.Max(0m, quantityAfterFill);
+                    if (positionQuantity == 0m)
+                    {
+                        investedAt = null;
+                    }
                 }
             }
             return investedAt;
         }
 
-        private sealed class InvestmentRecord
+        private static DealRecord? DeserializeRecord(string line)
+        {
+            try
+            {
+                return JsonConvert.DeserializeObject<DealRecord>(line);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        private sealed class DealRecord
         {
             [JsonProperty("account_id")]
             public string AccountId { get; set; } = string.Empty;
 
+            [JsonProperty("deal_id")]
+            public string DealId { get; set; } = string.Empty;
+
             [JsonProperty("symbol")]
             public string Symbol { get; set; } = string.Empty;
 
-            [JsonProperty("invested_at")]
-            public string InvestedAt { get; set; } = string.Empty;
+            [JsonProperty("filled_at")]
+            public string FilledAt { get; set; } = string.Empty;
+
+            [JsonProperty("fill_quantity")]
+            public decimal FillQuantity { get; set; }
         }
     }
 }

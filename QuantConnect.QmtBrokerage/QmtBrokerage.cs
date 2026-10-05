@@ -759,6 +759,44 @@ namespace QuantConnect.Brokerages.Qmt
 
         private void HandleDeal(QmtDealEventPayload deal, bool queueIfUnmatched = true)
         {
+            var dealSymbol = _symbolMapper.GetLeanSymbol(
+                deal.StockCode,
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            var dealDirection = ParseDirection(deal.Direction);
+            var dealFillQuantity = dealDirection == OrderDirection.Sell
+                ? -Math.Abs(deal.Volume)
+                : Math.Abs(deal.Volume);
+            // Pending deals are replayed after their order mapping arrives; persist only the gateway delivery.
+            if (queueIfUnmatched)
+            {
+                var accountId = _gatewayClient.ServerInformation?.AccountId ?? string.Empty;
+                var filledAt = ParseQmtTime(deal.Time);
+                try
+                {
+                    var recorded = QmtOrderEventStore.RecordDeal(
+                        accountId,
+                        deal.DealId,
+                        dealSymbol,
+                        filledAt,
+                        dealFillQuantity);
+                    Log.Trace(
+                        $"QmtBrokerage.HandleDeal(): deal_record={(recorded ? "added" : "duplicate")} " +
+                        $"account_id={accountId} deal_id={deal.DealId} symbol={dealSymbol.Value} " +
+                        $"filled_at={filledAt:O} fill_quantity={dealFillQuantity}");
+                }
+                catch (Exception error) when (
+                    error is IOException ||
+                    error is UnauthorizedAccessException ||
+                    error is ArgumentException)
+                {
+                    Log.Error(
+                        $"QmtBrokerage.HandleDeal(): deal_record=failed account_id={accountId} " +
+                        $"deal_id={deal.DealId} symbol={dealSymbol.Value} " +
+                        $"error={error.GetType().Name}:{error.Message}");
+                }
+            }
+
             var leanOrderId = ResolveLeanOrderId(deal.OrderId, null);
             if (!leanOrderId.HasValue && queueIfUnmatched && !string.IsNullOrWhiteSpace(deal.OrderId))
             {
@@ -787,11 +825,8 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             var leanOrder = _orderProvider.GetOrderById(leanOrderId.Value);
-            var symbol = leanOrder?.Symbol ?? _symbolMapper.GetLeanSymbol(
-                deal.StockCode,
-                SecurityType.Equity,
-                QmtSymbolMapper.MarketName);
-            var direction = leanOrder?.Direction ?? ParseDirection(deal.Direction);
+            var symbol = leanOrder?.Symbol ?? dealSymbol;
+            var direction = leanOrder?.Direction ?? dealDirection;
             var signedFillQuantity = direction == OrderDirection.Sell ? -Math.Abs(deal.Volume) : Math.Abs(deal.Volume);
             var cumulativeFilledQuantity = _filledQuantityByLeanOrderId.AddOrUpdate(
                 leanOrderId.Value,
@@ -800,28 +835,6 @@ namespace QuantConnect.Brokerages.Qmt
             var fillStatus = leanOrder != null && cumulativeFilledQuantity >= leanOrder.AbsoluteQuantity
                 ? OrderStatus.Filled
                 : OrderStatus.PartiallyFilled;
-            if (fillStatus == OrderStatus.Filled &&
-                leanOrder?.Tag?.StartsWith("enter", StringComparison.Ordinal) == true)
-            {
-                var accountId = _gatewayClient.ServerInformation?.AccountId ?? string.Empty;
-                var investedAt = ParseQmtTime(deal.Time);
-                try
-                {
-                    QmtOrderEventStore.RecordInvestedAt(accountId, symbol, investedAt);
-                    Log.Trace(
-                        $"QmtBrokerage.HandleDeal(): investment_record=ok account_id={accountId} " +
-                        $"symbol={symbol.Value} invested_at={investedAt:O}");
-                }
-                catch (Exception error) when (
-                    error is IOException ||
-                    error is UnauthorizedAccessException ||
-                    error is ArgumentException)
-                {
-                    Log.Error(
-                        $"QmtBrokerage.HandleDeal(): investment_record=failed account_id={accountId} " +
-                        $"symbol={symbol.Value} error={error.GetType().Name}:{error.Message}");
-                }
-            }
             OnOrderEvent(new OrderEvent(
                 leanOrderId.Value,
                 symbol,
