@@ -49,6 +49,36 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         }
 
         [Test]
+        public void CachesSuccessfulStatusForThirtySeconds()
+        {
+            QmtMarket.RegisterIdentifier();
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                "002860.SZ",
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            var initialUtcTime = new DateTime(2026, 10, 8, 6, 45, 0, DateTimeKind.Utc);
+            var timeProvider = new QmtOrderTestTimeProvider(initialUtcTime);
+            using var gatewayClient = new QmtSecurityStatusTestGatewayClient(false);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new QmtOrderTestProvider(),
+                timeProvider: timeProvider);
+
+            Assert.That(brokerage.IsSecurityTrading(symbol), Is.False);
+            gatewayClient.SetIsTrading(true);
+            timeProvider.SetUtcNow(initialUtcTime.AddSeconds(29));
+
+            Assert.That(brokerage.IsSecurityTrading(symbol), Is.False);
+            timeProvider.SetUtcNow(initialUtcTime.AddSeconds(30));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(brokerage.IsSecurityTrading(symbol), Is.True);
+                Assert.That(gatewayClient.RequestCount, Is.EqualTo(2));
+            });
+        }
+
+        [Test]
         public void FacadeReturnsRegisteredProviderStatus()
         {
             QmtMarket.RegisterIdentifier();
@@ -119,7 +149,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
         private sealed class QmtSecurityStatusTestGatewayClient : IQmtGatewayClient
         {
-            private readonly bool _isTrading;
+            private bool _isTrading;
 
             public bool IsConnected { get; private set; } = true;
             public QmtHelloPayload? ServerInformation { get; private set; } = new QmtHelloPayload
@@ -129,6 +159,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             };
             public string RequestedOperation { get; private set; } = string.Empty;
             public string RequestedStockCode { get; private set; } = string.Empty;
+            public int RequestCount { get; private set; }
 
             public event EventHandler<QmtGatewayMessageEventArgs>? EventReceived
             {
@@ -169,6 +200,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                 object? payload = null,
                 CancellationToken cancellationToken = default)
             {
+                RequestCount++;
                 RequestedOperation = operation;
                 RequestedStockCode = ((QmtStockCodeRequest)payload!).StockCode;
                 return Task.FromResult(new QmtProtocolMessage
@@ -183,6 +215,11 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                         IsTrading = _isTrading
                     })
                 });
+            }
+
+            public void SetIsTrading(bool isTrading)
+            {
+                _isTrading = isTrading;
             }
 
             public void Dispose()

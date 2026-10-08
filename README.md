@@ -148,7 +148,8 @@ is_trading = QmtSecurityStatus.is_trading(symbol)
 已经验证上海 `five-level-immediate-or-cancel`（价格类型 `42`）可以成交。
 证券状态查询是显式只读调用，不会挂到 `Security.IsTradable` 或现有下单路径上。
 返回 `True` 表示可交易，`False` 表示停牌；QMT 状态不可用时记录错误并返回
-`None`，不会让策略主线程崩溃。
+`None`，不会让策略主线程崩溃。成功的查询结果按标的缓存 30 秒；连接断开或
+重新建立时清空缓存。
 
 ## Repository layout
 

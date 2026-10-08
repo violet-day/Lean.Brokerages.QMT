@@ -27,6 +27,7 @@ namespace QuantConnect.Brokerages.Qmt
     public sealed class QmtBrokerage : Brokerage, IDataQueueHandler, IQmtSecurityStatusProvider
     {
         private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
+        private static readonly TimeSpan SecurityTradingStatusCacheDuration = TimeSpan.FromSeconds(30);
 
         private static readonly TimeSpan[] DefaultReconnectDelays =
         {
@@ -64,6 +65,10 @@ namespace QuantConnect.Brokerages.Qmt
             new ConcurrentDictionary<int, decimal>();
         private readonly ConcurrentDictionary<string, byte> _publishedSubmittedOrderEventSignatures =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, (bool IsTrading, DateTime ExpiresAtUtc)>
+            _securityTradingStatusByStockCode =
+                new ConcurrentDictionary<string, (bool IsTrading, DateTime ExpiresAtUtc)>(
+                    StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>> _pendingDealsByNativeOrderId =
             new ConcurrentDictionary<string, ConcurrentQueue<QmtDealEventPayload>>(StringComparer.Ordinal);
         private readonly object _pendingDealsLock = new object();
@@ -118,6 +123,7 @@ namespace QuantConnect.Brokerages.Qmt
             var serverInformation = _gatewayClient.ServerInformation ??
                 throw new QmtGatewayProtocolException("QMT Gateway connected without hello server information.");
             _accountProperties = new QmtAccountProperties(serverInformation.IsSimulation);
+            _securityTradingStatusByStockCode.Clear();
             Interlocked.Exchange(ref _isRecoveringConnection, 0);
             Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
             Log.Trace(
@@ -132,6 +138,7 @@ namespace QuantConnect.Brokerages.Qmt
             CancelReconnectLoop();
             Interlocked.Exchange(ref _isRecoveringConnection, 0);
             Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
+            _securityTradingStatusByStockCode.Clear();
             _gatewayClient.Disconnect();
             Log.Trace("QmtBrokerage.Disconnect(): status=ok");
         }
@@ -193,6 +200,16 @@ namespace QuantConnect.Brokerages.Qmt
         {
             EnsureConnected();
             var stockCode = _symbolMapper.GetBrokerageSymbol(symbol);
+            var utcTime = _timeProvider.GetUtcNow();
+            if (_securityTradingStatusByStockCode.TryGetValue(stockCode, out var cachedStatus) &&
+                cachedStatus.ExpiresAtUtc > utcTime)
+            {
+                Log.Trace(
+                    $"QmtBrokerage.IsSecurityTrading(): status=ok symbol={symbol.Value} " +
+                    $"is_trading={cachedStatus.IsTrading.ToString().ToLowerInvariant()} source=cache");
+                return cachedStatus.IsTrading;
+            }
+
             var response = SendRequest(
                 QmtProtocol.Operations.QuerySecurityStatus,
                 new QmtStockCodeRequest { StockCode = stockCode });
@@ -203,9 +220,12 @@ namespace QuantConnect.Brokerages.Qmt
                     $"QMT security status response symbol mismatch. Expected '{stockCode}', received '{status.StockCode}'.");
             }
 
+            _securityTradingStatusByStockCode[stockCode] = (
+                status.IsTrading,
+                _timeProvider.GetUtcNow().Add(SecurityTradingStatusCacheDuration));
             Log.Trace(
                 $"QmtBrokerage.IsSecurityTrading(): status=ok symbol={symbol.Value} " +
-                $"is_trading={status.IsTrading.ToString().ToLowerInvariant()}");
+                $"is_trading={status.IsTrading.ToString().ToLowerInvariant()} source=qmt");
             return status.IsTrading;
         }
 
@@ -574,6 +594,7 @@ namespace QuantConnect.Brokerages.Qmt
             _gatewayClient.EventReceived -= HandleGatewayEvent;
             _gatewayClient.Disconnected -= HandleGatewayDisconnected;
             _subscriptions.Clear();
+            _securityTradingStatusByStockCode.Clear();
             _dataAggregator.Dispose();
             _gatewayClient.Dispose();
             base.Dispose();
@@ -1057,6 +1078,7 @@ namespace QuantConnect.Brokerages.Qmt
 
         private void HandleGatewayDisconnected(object? sender, QmtGatewayDisconnectedEventArgs eventArgs)
         {
+            _securityTradingStatusByStockCode.Clear();
             var reason = eventArgs.Exception?.Message ?? "The QMT Gateway connection closed.";
             lock (_reconnectLock)
             {

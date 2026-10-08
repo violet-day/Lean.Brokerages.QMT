@@ -160,7 +160,7 @@ namespace QuantConnect.Brokerages.Qmt.Tests
 
     internal sealed class QmtOrderTestTimeProvider : ITimeProvider
     {
-        private readonly DateTime _utcTime;
+        private DateTime _utcTime;
 
         public QmtOrderTestTimeProvider(DateTime utcTime)
         {
@@ -170,6 +170,11 @@ namespace QuantConnect.Brokerages.Qmt.Tests
         public DateTime GetUtcNow()
         {
             return _utcTime;
+        }
+
+        public void SetUtcNow(DateTime utcTime)
+        {
+            _utcTime = utcTime;
         }
     }
 }
