@@ -245,6 +245,120 @@ class QmtGatewayContractTests(unittest.TestCase):
         )
         self.assertEqual({}, response["payload"])
 
+    def test_security_status_query_returns_qmt_is_trading(self):
+        queried_stock_codes = []
+
+        def get_instrument_detail(stock_code):
+            queried_stock_codes.append(stock_code)
+            return {"IsTrading": False}
+
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="account-1",
+            get_instrument_detail_function=get_instrument_detail,
+            bind_host="127.0.0.1",
+            bind_port=0,
+        )
+        gateway.start()
+        client = GatewaySocketClient(gateway)
+        try:
+            response = client.request(
+                "query_security_status",
+                {"stock_code": "002860.SZ"},
+            )
+        finally:
+            client.close()
+            gateway.stop()
+
+        self.assertTrue(response["success"])
+        self.assertEqual(
+            {"stock_code": "002860.SZ", "is_trading": False},
+            response["payload"],
+        )
+        self.assertEqual(["002860.SZ"], queried_stock_codes)
+
+    def test_security_status_query_maps_suspended_instrument_status(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="account-1",
+            get_instrument_detail_function=lambda stock_code: {
+                "IsTrading": None,
+                "InstrumentStatus": 7,
+            },
+            bind_host="127.0.0.1",
+            bind_port=0,
+        )
+        gateway.start()
+        client = GatewaySocketClient(gateway)
+        try:
+            response = client.request(
+                "query_security_status",
+                {"stock_code": "002860.SZ"},
+            )
+        finally:
+            client.close()
+            gateway.stop()
+
+        self.assertTrue(response["success"])
+        self.assertEqual(
+            {"stock_code": "002860.SZ", "is_trading": False},
+            response["payload"],
+        )
+
+    def test_security_status_query_maps_normal_instrument_status(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="account-1",
+            get_instrument_detail_function=lambda stock_code: {
+                "IsTrading": None,
+                "InstrumentStatus": 0,
+            },
+            bind_host="127.0.0.1",
+            bind_port=0,
+        )
+        gateway.start()
+        client = GatewaySocketClient(gateway)
+        try:
+            response = client.request(
+                "query_security_status",
+                {"stock_code": "600000.SH"},
+            )
+        finally:
+            client.close()
+            gateway.stop()
+
+        self.assertTrue(response["success"])
+        self.assertEqual(
+            {"stock_code": "600000.SH", "is_trading": True},
+            response["payload"],
+        )
+
+    def test_security_status_query_rejects_missing_qmt_status(self):
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="account-1",
+            get_instrument_detail_function=lambda stock_code: {},
+            bind_host="127.0.0.1",
+            bind_port=0,
+        )
+        gateway.start()
+        client = GatewaySocketClient(gateway)
+        try:
+            response = client.request(
+                "query_security_status",
+                {"stock_code": "002860.SZ"},
+            )
+        finally:
+            client.close()
+            gateway.stop()
+
+        self.assertFalse(response["success"])
+        self.assertEqual(
+            "QMT_SECURITY_STATUS_UNAVAILABLE",
+            response["error_code"],
+        )
+        self.assertEqual({}, response["payload"])
+
     def test_current_order_query_rejects_different_account(self):
         native_trade_detail_query = NativeTradeDetailQuery()
         gateway = self.gateway_module.LeanQmtGateway(

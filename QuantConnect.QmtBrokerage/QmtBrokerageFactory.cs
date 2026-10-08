@@ -66,6 +66,7 @@ namespace QuantConnect.Brokerages.Qmt
                 TimeSpan.FromSeconds(requestTimeoutSeconds));
             var brokerage = new QmtBrokerage(gatewayClient, algorithm.Transactions);
             Composer.Instance.AddPart<IDataQueueHandler>(brokerage);
+            Composer.Instance.AddPart<IQmtSecurityStatusProvider>(brokerage);
             return brokerage;
         }
 

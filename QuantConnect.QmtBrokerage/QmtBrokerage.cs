@@ -24,7 +24,7 @@ namespace QuantConnect.Brokerages.Qmt
     /// LEAN brokerage and live-data adapter for the QMT Python Gateway.
     /// </summary>
     [BrokerageFactory(typeof(QmtBrokerageFactory))]
-    public sealed class QmtBrokerage : Brokerage, IDataQueueHandler
+    public sealed class QmtBrokerage : Brokerage, IDataQueueHandler, IQmtSecurityStatusProvider
     {
         private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
 
@@ -187,6 +187,26 @@ namespace QuantConnect.Brokerages.Qmt
                 $"QmtBrokerage.GetOpenOrders(): status=ok open_order_snapshots={openOrderSnapshots.Count} " +
                 $"mapped_open_orders={orders.Count} skipped_open_orders={openOrderSnapshots.Count - orders.Count}");
             return orders;
+        }
+
+        public bool IsSecurityTrading(Symbol symbol)
+        {
+            EnsureConnected();
+            var stockCode = _symbolMapper.GetBrokerageSymbol(symbol);
+            var response = SendRequest(
+                QmtProtocol.Operations.QuerySecurityStatus,
+                new QmtStockCodeRequest { StockCode = stockCode });
+            var status = response.ToPayload<QmtQuerySecurityStatusPayload>();
+            if (!string.Equals(status.StockCode, stockCode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new QmtGatewayProtocolException(
+                    $"QMT security status response symbol mismatch. Expected '{stockCode}', received '{status.StockCode}'.");
+            }
+
+            Log.Trace(
+                $"QmtBrokerage.IsSecurityTrading(): status=ok symbol={symbol.Value} " +
+                $"is_trading={status.IsTrading.ToString().ToLowerInvariant()}");
+            return status.IsTrading;
         }
 
         public override IEnumerable<BaseData> GetHistory(HistoryRequest request)

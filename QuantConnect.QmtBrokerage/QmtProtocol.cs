@@ -25,6 +25,7 @@ namespace QuantConnect.Brokerages.Qmt
             public const string QueryAccount = "query_account";
             public const string QueryPositions = "query_positions";
             public const string QueryOrders = "query_orders";
+            public const string QuerySecurityStatus = "query_security_status";
             public const string QueryHistory = "query_history";
             public const string PlaceOrder = "place_order";
             public const string CancelOrder = "cancel_order";
@@ -317,6 +318,15 @@ namespace QuantConnect.Brokerages.Qmt
     {
         [JsonProperty("stock_code")]
         public string StockCode { get; set; } = string.Empty;
+    }
+
+    public sealed class QmtQuerySecurityStatusPayload
+    {
+        [JsonProperty("stock_code")]
+        public string StockCode { get; set; } = string.Empty;
+
+        [JsonProperty("is_trading")]
+        public bool IsTrading { get; set; }
     }
 
     public sealed class QmtHistoryRequest

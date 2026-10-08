@@ -829,6 +829,7 @@ class LeanQmtGateway(object):
         down_history_data_function=None,
         get_market_data_function=None,
         history_volume_unit_without_amount="shares",
+        get_instrument_detail_function=None,
         get_full_tick_function=None,
         subscribe_quote_function=None,
         unsubscribe_quote_function=None,
@@ -846,6 +847,7 @@ class LeanQmtGateway(object):
         self.history_volume_unit_without_amount = str(
             history_volume_unit_without_amount or "shares"
         )
+        self.get_instrument_detail_function = get_instrument_detail_function
         self.get_full_tick_function = get_full_tick_function
         self.subscribe_quote_function = subscribe_quote_function
         self.unsubscribe_quote_function = unsubscribe_quote_function
@@ -1668,6 +1670,8 @@ class LeanQmtGateway(object):
                     for order_info in self._query_trade_detail("ORDER")
                 ]
             }
+        if operation == "query_security_status":
+            return self._query_security_status(payload)
         if operation == "query_history":
             return self._query_history(payload)
         if operation == "place_order":
@@ -1682,6 +1686,69 @@ class LeanQmtGateway(object):
             "UNSUPPORTED_OPERATION",
             "Unsupported operation: %s" % operation,
         )
+
+    def _query_security_status(self, payload):
+        stock_code = str(payload.get("stock_code") or "").strip().upper()
+        self._validate_stock_code(stock_code)
+        if not callable(self.get_instrument_detail_function):
+            raise _RequestError(
+                "QMT_API_UNAVAILABLE",
+                "ContextInfo.get_instrumentdetail is unavailable.",
+            )
+
+        instrument_detail = self.get_instrument_detail_function(stock_code)
+        is_trading = _attribute(
+            instrument_detail,
+            ("IsTrading", "is_trading"),
+            None,
+        )
+        instrument_status = _attribute(
+            instrument_detail,
+            ("InstrumentStatus", "instrument_status"),
+            None,
+        )
+        status_source = "is_trading"
+        if (
+            not isinstance(is_trading, bool)
+            and isinstance(instrument_status, int)
+            and not isinstance(instrument_status, bool)
+            and instrument_status in (0, 7)
+        ):
+            is_trading = instrument_status == 0
+            status_source = "instrument_status"
+        if not isinstance(is_trading, bool):
+            instrument_detail_fields = ""
+            if isinstance(instrument_detail, dict):
+                instrument_detail_fields = ",".join(
+                    sorted(str(field_name) for field_name in instrument_detail)
+                )[:500]
+            _log(
+                "security_status_query",
+                instrument_detail_fields=instrument_detail_fields,
+                instrument_status_type=type(instrument_status).__name__,
+                instrument_status_value=repr(instrument_status)[:80],
+                is_trading_type=type(is_trading).__name__,
+                is_trading_value=repr(is_trading)[:80],
+                status="unavailable",
+                stock_code=stock_code,
+            )
+            raise _RequestError(
+                "QMT_SECURITY_STATUS_UNAVAILABLE",
+                "QMT instrument detail does not contain a boolean IsTrading value.",
+            )
+
+        _log(
+            "security_status_query",
+            instrument_status=instrument_status,
+            is_trading=str(is_trading).lower(),
+            status="ok",
+            status_source=status_source,
+            stock_code=stock_code,
+        )
+        return {
+            "stock_code": stock_code,
+            "is_trading": is_trading,
+        }
 
     def _query_history(self, payload):
         stock_code = str(payload.get("stock_code") or "").strip().upper()
@@ -2224,6 +2291,15 @@ def init(
         "full_tick_api_selected",
         available=callable(get_full_tick_function),
     )
+    get_instrument_detail_function = getattr(
+        context_info,
+        "get_instrumentdetail",
+        None,
+    )
+    _log(
+        "security_status_api_selected",
+        available=callable(get_instrument_detail_function),
+    )
     _gateway = LeanQmtGateway(
         context_info=context_info,
         account_id=account_id,
@@ -2235,6 +2311,7 @@ def init(
         history_volume_unit_without_amount=(
             "shares" if history_api_name == "get_market_data_ex_ori" else "lots"
         ),
+        get_instrument_detail_function=get_instrument_detail_function,
         get_full_tick_function=get_full_tick_function,
         subscribe_quote_function=getattr(context_info, "subscribe_quote", None),
         unsubscribe_quote_function=getattr(

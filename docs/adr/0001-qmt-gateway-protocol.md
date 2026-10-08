@@ -138,6 +138,25 @@ Final order state arrives through an `order` event.
 
 ### Market data
 
+`query_security_status` explicitly queries QMT instrument details without
+changing LEAN `Security` state or any order path:
+
+```json
+{"stock_code":"002860.SZ"}
+```
+
+The response contains a normalized boolean trading-status value:
+
+```json
+{"stock_code":"002860.SZ","is_trading":false}
+```
+
+The Gateway uses a boolean `IsTrading` value when QMT supplies one. The current
+embedded QMT returns `None` for that field, so the Gateway also accepts the two
+observed integer `InstrumentStatus` values: `0` for normal trading and `7` for
+suspension. Missing APIs and any other value are protocol failures; the Gateway
+does not infer suspension from price or volume.
+
 `query_history` returns bars whose `volume` is always the number of shares. The
 Gateway uses QMT turnover to distinguish source values reported in shares from
 values reported in lots and converts lots at 100 shares per lot. Consumers must

@@ -55,5 +55,19 @@ namespace QuantConnect.Brokerages.Qmt.Tests.E2E.ReadOnly
             });
         }
 
+        [Test]
+        public void ReturnsSecurityTradingStatus()
+        {
+            Context.Run("security-status", () =>
+            {
+                var isTrading = Context.Brokerage.IsSecurityTrading(Context.Symbol);
+                Assert.That(isTrading, Is.True);
+                Context.WriteStage(
+                    "security-status",
+                    "ok",
+                    $"symbol={Context.Symbol.Value} is_trading={isTrading.ToString().ToLowerInvariant()}");
+            });
+        }
+
     }
 }

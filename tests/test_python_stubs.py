@@ -24,6 +24,7 @@ class PythonStubTests(unittest.TestCase):
 
         self.assertEqual(
             {
+                "IQmtSecurityStatusProvider",
                 "QmtBrokerageModel",
                 "QmtEquityMarketRules",
                 "QmtMarket",
@@ -33,6 +34,16 @@ class PythonStubTests(unittest.TestCase):
                 "QmtSymbolMapper",
             },
             set(classes_by_name),
+        )
+
+        security_status_provider_methods = {
+            node.name
+            for node in classes_by_name["IQmtSecurityStatusProvider"].body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            {"is_security_trading"},
+            security_status_provider_methods,
         )
 
         enum_member_names = {

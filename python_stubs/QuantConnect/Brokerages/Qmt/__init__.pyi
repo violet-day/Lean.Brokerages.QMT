@@ -5,6 +5,7 @@ import typing
 import QuantConnect.Brokerages
 import QuantConnect.Interfaces
 import QuantConnect.Orders
+import QuantConnect
 from System import DateTime
 
 
@@ -34,6 +35,12 @@ class QmtBrokerageModel(
         commission_rate: float = ...,
         minimum_commission: float = ...,
     ) -> None: ...
+
+
+class IQmtSecurityStatusProvider:
+    """Queries the current QMT trading status for a China equity."""
+
+    def is_security_trading(self, symbol: QuantConnect.Symbol) -> bool: ...
 
 
 class QmtMarket:

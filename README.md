@@ -22,6 +22,7 @@ trading E2E against account `67045678`'s simulation counter:
 - NDJSON-over-TCP protocol v1 with account-checked `hello`, request IDs,
   timeouts, errors, events, and duplicate-request caching;
 - account cash, positions, and direct current-order queries;
+- on-demand per-security trading-status queries from QMT instrument details;
 - China A-share symbol conversion for `.SH`, `.SZ`, and `.BJ` codes;
 - Market and Limit orders, cancel, and an explicit unsupported result for
   order updates;
@@ -128,20 +129,26 @@ LEAN Brokerage 模块安装。
 
 ```python
 from QuantConnect.Brokerages.Qmt import (
+    IQmtSecurityStatusProvider,
     QmtBrokerageModel,
     QmtMarketOrderStyle,
     QmtOrderProperties,
 )
+from QuantConnect.Util import Composer
 
 self.set_brokerage_model(QmtBrokerageModel())
 
 order_properties = QmtOrderProperties()
 order_properties.market_order_style = QmtMarketOrderStyle.LATEST_PRICE
 self.market_order(symbol, 100, order_properties=order_properties)
+
+security_status_provider = Composer.instance.get_part[IQmtSecurityStatusProvider]()
+is_trading = security_status_provider.is_security_trading(symbol)
 ```
 
 市场单样式是必填项；未指定时 Brokerage 会拒绝该市场单。当前真实 QMT 模拟柜台
 已经验证上海 `five-level-immediate-or-cancel`（价格类型 `42`）可以成交。
+证券状态查询是显式只读调用，不会挂到 `Security.IsTradable` 或现有下单路径上。
 
 ## Repository layout
 
