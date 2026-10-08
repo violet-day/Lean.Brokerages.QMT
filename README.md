@@ -129,12 +129,11 @@ LEAN Brokerage 模块安装。
 
 ```python
 from QuantConnect.Brokerages.Qmt import (
-    IQmtSecurityStatusProvider,
     QmtBrokerageModel,
     QmtMarketOrderStyle,
     QmtOrderProperties,
+    QmtSecurityStatus,
 )
-from QuantConnect.Util import Composer
 
 self.set_brokerage_model(QmtBrokerageModel())
 
@@ -142,13 +141,14 @@ order_properties = QmtOrderProperties()
 order_properties.market_order_style = QmtMarketOrderStyle.LATEST_PRICE
 self.market_order(symbol, 100, order_properties=order_properties)
 
-security_status_provider = Composer.instance.get_part[IQmtSecurityStatusProvider]()
-is_trading = security_status_provider.is_security_trading(symbol)
+is_trading = QmtSecurityStatus.is_trading(symbol)
 ```
 
 市场单样式是必填项；未指定时 Brokerage 会拒绝该市场单。当前真实 QMT 模拟柜台
 已经验证上海 `five-level-immediate-or-cancel`（价格类型 `42`）可以成交。
 证券状态查询是显式只读调用，不会挂到 `Security.IsTradable` 或现有下单路径上。
+返回 `True` 表示可交易，`False` 表示停牌；QMT 状态不可用时记录错误并返回
+`None`，不会让策略主线程崩溃。
 
 ## Repository layout
 

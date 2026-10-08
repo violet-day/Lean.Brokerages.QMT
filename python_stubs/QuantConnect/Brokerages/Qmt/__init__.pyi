@@ -37,10 +37,13 @@ class QmtBrokerageModel(
     ) -> None: ...
 
 
-class IQmtSecurityStatusProvider:
-    """Queries the current QMT trading status for a China equity."""
+class QmtSecurityStatus:
+    """Provides a strategy-facing QMT security-status query."""
 
-    def is_security_trading(self, symbol: QuantConnect.Symbol) -> bool: ...
+    @staticmethod
+    def is_trading(
+        symbol: QuantConnect.Symbol,
+    ) -> typing.Optional[bool]: ...
 
 
 class QmtMarket:

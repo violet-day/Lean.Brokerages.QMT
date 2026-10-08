@@ -3,12 +3,26 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
+using QuantConnect.Util;
 
 namespace QuantConnect.Brokerages.Qmt.Tests
 {
     [TestFixture]
+    [NonParallelizable]
     public class QmtBrokerageSecurityStatusTests
     {
+        [SetUp]
+        public void SetUp()
+        {
+            Composer.Instance.Reset();
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Composer.Instance.Reset();
+        }
+
         [Test]
         public void QueriesSecurityTradingStatusWithoutChangingLeanSecurity()
         {
@@ -32,6 +46,75 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     Is.EqualTo(QmtProtocol.Operations.QuerySecurityStatus));
                 Assert.That(gatewayClient.RequestedStockCode, Is.EqualTo("002860.SZ"));
             });
+        }
+
+        [Test]
+        public void FacadeReturnsRegisteredProviderStatus()
+        {
+            QmtMarket.RegisterIdentifier();
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                "002860.SZ",
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            Composer.Instance.AddPart<IQmtSecurityStatusProvider>(
+                new FixedSecurityStatusProvider(false));
+
+            var isTrading = QmtSecurityStatus.IsTrading(symbol);
+
+            Assert.That(isTrading, Is.False);
+        }
+
+        [Test]
+        public void FacadeReturnsNullWhenProviderIsUnavailable()
+        {
+            QmtMarket.RegisterIdentifier();
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                "002860.SZ",
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+
+            var isTrading = QmtSecurityStatus.IsTrading(symbol);
+
+            Assert.That(isTrading, Is.Null);
+        }
+
+        [Test]
+        public void FacadeReturnsNullWhenProviderThrows()
+        {
+            QmtMarket.RegisterIdentifier();
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                "002860.SZ",
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            Composer.Instance.AddPart<IQmtSecurityStatusProvider>(
+                new ThrowingSecurityStatusProvider());
+
+            var isTrading = QmtSecurityStatus.IsTrading(symbol);
+
+            Assert.That(isTrading, Is.Null);
+        }
+
+        private sealed class FixedSecurityStatusProvider : IQmtSecurityStatusProvider
+        {
+            private readonly bool _isTrading;
+
+            public FixedSecurityStatusProvider(bool isTrading)
+            {
+                _isTrading = isTrading;
+            }
+
+            public bool IsSecurityTrading(Symbol symbol)
+            {
+                return _isTrading;
+            }
+        }
+
+        private sealed class ThrowingSecurityStatusProvider : IQmtSecurityStatusProvider
+        {
+            public bool IsSecurityTrading(Symbol symbol)
+            {
+                throw new InvalidOperationException("QMT status unavailable.");
+            }
         }
 
         private sealed class QmtSecurityStatusTestGatewayClient : IQmtGatewayClient
