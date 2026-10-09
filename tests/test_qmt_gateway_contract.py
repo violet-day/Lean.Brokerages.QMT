@@ -283,7 +283,7 @@ class QmtGatewayContractTests(unittest.TestCase):
             account_id="account-1",
             get_instrument_detail_function=lambda stock_code: {
                 "IsTrading": None,
-                "InstrumentStatus": 7,
+                "InstrumentStatus": 8,
             },
             bind_host="127.0.0.1",
             bind_port=0,

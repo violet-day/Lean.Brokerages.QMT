@@ -1712,9 +1712,8 @@ class LeanQmtGateway(object):
             not isinstance(is_trading, bool)
             and isinstance(instrument_status, int)
             and not isinstance(instrument_status, bool)
-            and instrument_status in (0, 7)
         ):
-            is_trading = instrument_status == 0
+            is_trading = instrument_status <= 0
             status_source = "instrument_status"
         if not isinstance(is_trading, bool):
             instrument_detail_fields = ""

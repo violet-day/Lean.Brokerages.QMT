@@ -152,10 +152,11 @@ The response contains a normalized boolean trading-status value:
 ```
 
 The Gateway uses a boolean `IsTrading` value when QMT supplies one. The current
-embedded QMT returns `None` for that field, so the Gateway also accepts the two
-observed integer `InstrumentStatus` values: `0` for normal trading and `7` for
-suspension. Missing APIs and any other value are protocol failures; the Gateway
-does not infer suspension from price or volume.
+embedded QMT returns `None` for that field, so the Gateway falls back to QMT's
+integer `InstrumentStatus`: values less than or equal to `0` mean normal trading
+(`-1` means resumed), while positive values count suspension days. Missing APIs
+and non-integer values are protocol failures; the Gateway does not infer
+suspension from price or volume.
 
 `query_history` returns bars whose `volume` is always the number of shares. The
 Gateway uses QMT turnover to distinguish source values reported in shares from
