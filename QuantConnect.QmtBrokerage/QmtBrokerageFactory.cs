@@ -65,6 +65,7 @@ namespace QuantConnect.Brokerages.Qmt
                 accountId,
                 TimeSpan.FromSeconds(requestTimeoutSeconds));
             var brokerage = new QmtBrokerage(gatewayClient, algorithm.Transactions);
+            algorithm.SetDateTime(DateTime.UtcNow);
             Composer.Instance.AddPart<IDataQueueHandler>(brokerage);
             Composer.Instance.AddPart<IQmtSecurityStatusProvider>(brokerage);
             return brokerage;
