@@ -160,6 +160,100 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             });
         }
 
+        [Test]
+        public void PublishesBrokerageMessageForExternalCumulativeFills()
+        {
+            var gatewayClient = new QmtOrderTestGatewayClient(
+                cancellationSubmitted: true);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new QmtOrderTestProvider());
+            var receivedMessages = new List<BrokerageMessageEvent>();
+            var receivedOrderEvents = new List<OrderEvent>();
+            brokerage.Message += (_, message) => receivedMessages.Add(message);
+            brokerage.OrdersStatusChanged += (_, orderEvents) =>
+                receivedOrderEvents.AddRange(orderEvents);
+
+            var externalOrderUpdate = new QmtOrderEventPayload
+            {
+                StockCode = "600000.SH",
+                OrderId = "external-order-1",
+                ClientOrderId = "999",
+                Status = 55,
+                SubmitStatus = 56,
+                Direction = "buy",
+                OrderType = "limit",
+                OriginalVolume = 200,
+                TradedVolume = 100,
+                TradedPrice = 10.25m
+            };
+            gatewayClient.EmitOrderEvent(externalOrderUpdate);
+            gatewayClient.EmitOrderEvent(externalOrderUpdate);
+            externalOrderUpdate.Status = 56;
+            externalOrderUpdate.TradedVolume = 200;
+            gatewayClient.EmitOrderEvent(externalOrderUpdate);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(receivedOrderEvents, Is.Empty);
+                Assert.That(receivedMessages, Has.Count.EqualTo(2));
+                Assert.That(
+                    receivedMessages.Select(message => message.Type),
+                    Is.All.EqualTo(BrokerageMessageType.Information));
+                Assert.That(
+                    receivedMessages.Select(message => message.Code),
+                    Is.All.EqualTo("BrokerageSideOrderFill"));
+                Assert.That(
+                    receivedMessages[0].Message,
+                    Does.Contain("NativeOrderId: external-order-1"));
+                Assert.That(
+                    receivedMessages[0].Message,
+                    Does.Contain("CumulativeQuantity: 100"));
+                Assert.That(
+                    receivedMessages[1].Message,
+                    Does.Contain("CumulativeQuantity: 200"));
+            });
+        }
+
+        [Test]
+        public void DoesNotReportLeanOrderFillAsBrokerageSideFill()
+        {
+            var symbol = new QmtSymbolMapper().GetLeanSymbol(
+                "600000.SH",
+                SecurityType.Equity,
+                QmtSymbolMapper.MarketName);
+            var order = new LimitOrder(
+                symbol,
+                100,
+                10.25m,
+                DateTime.UtcNow,
+                string.Empty);
+            typeof(Order).GetProperty(nameof(Order.Id))!.SetValue(order, 42);
+            var gatewayClient = new QmtOrderTestGatewayClient(
+                cancellationSubmitted: true);
+            using var brokerage = new QmtBrokerage(
+                gatewayClient,
+                new QmtOrderTestProvider(order));
+            var receivedMessages = new List<BrokerageMessageEvent>();
+            brokerage.Message += (_, message) => receivedMessages.Add(message);
+
+            gatewayClient.EmitOrderEvent(new QmtOrderEventPayload
+            {
+                StockCode = "600000.SH",
+                OrderId = "lean-order-1",
+                ClientOrderId = "42",
+                Status = 56,
+                SubmitStatus = 56,
+                Direction = "buy",
+                OrderType = "limit",
+                OriginalVolume = 100,
+                TradedVolume = 100,
+                TradedPrice = 10.25m
+            });
+
+            Assert.That(receivedMessages, Is.Empty);
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void ReturnsGatewayCancellationResult(bool cancellationSubmitted)

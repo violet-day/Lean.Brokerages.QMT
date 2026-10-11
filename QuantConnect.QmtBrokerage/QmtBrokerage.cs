@@ -26,6 +26,7 @@ namespace QuantConnect.Brokerages.Qmt
     [BrokerageFactory(typeof(QmtBrokerageFactory))]
     public sealed class QmtBrokerage : Brokerage, IDataQueueHandler, IQmtSecurityStatusProvider
     {
+        private const string BrokerageSideOrderFillMessageCode = "BrokerageSideOrderFill";
         private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
         private static readonly TimeSpan SecurityTradingStatusCacheDuration = TimeSpan.FromSeconds(30);
 
@@ -65,6 +66,8 @@ namespace QuantConnect.Brokerages.Qmt
             new ConcurrentDictionary<int, decimal>();
         private readonly ConcurrentDictionary<string, byte> _publishedSubmittedOrderEventSignatures =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, decimal> _brokerageSideOrderCumulativeFilledQuantities =
+            new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, (bool IsTrading, DateTime ExpiresAtUtc)>
             _securityTradingStatusByStockCode =
                 new ConcurrentDictionary<string, (bool IsTrading, DateTime ExpiresAtUtc)>(
@@ -710,6 +713,21 @@ namespace QuantConnect.Brokerages.Qmt
             var leanOrderId = ResolveLeanOrderId(
                 orderUpdate.OrderId,
                 orderUpdate.ClientOrderId);
+            var leanOrder = leanOrderId.HasValue
+                ? _orderProvider.GetOrderById(leanOrderId.Value)
+                : null;
+            var status = QmtOrderStatusMapper.GetLeanOrderStatus(orderUpdate.Status);
+            if ((status == OrderStatus.PartiallyFilled || status == OrderStatus.Filled) &&
+                leanOrder == null)
+            {
+                var messagePublished = ReportBrokerageSideOrderFill(orderUpdate, status);
+                Log.Trace(
+                    $"QmtBrokerage.HandleOrder(): status=external-fill " +
+                    $"message_published={messagePublished.ToString().ToLowerInvariant()} " +
+                    $"native_order_id={orderUpdate.OrderId} client_order_id={orderUpdate.ClientOrderId} " +
+                    $"stock_code={orderUpdate.StockCode} cumulative_fill_quantity={orderUpdate.TradedVolume}");
+                return;
+            }
             if (!leanOrderId.HasValue)
             {
                 Log.Trace(
@@ -718,7 +736,6 @@ namespace QuantConnect.Brokerages.Qmt
                 return;
             }
 
-            var leanOrder = _orderProvider.GetOrderById(leanOrderId.Value);
             if (!string.IsNullOrWhiteSpace(orderUpdate.OrderId))
             {
                 RegisterNativeOrderId(orderUpdate.OrderId, leanOrderId.Value);
@@ -728,7 +745,6 @@ namespace QuantConnect.Brokerages.Qmt
                 SecurityType.Equity,
                 QmtSymbolMapper.MarketName);
             var direction = leanOrder?.Direction ?? ParseDirection(orderUpdate.Direction);
-            var status = QmtOrderStatusMapper.GetLeanOrderStatus(orderUpdate.Status);
             var orderErrorMessage = GetOrderEventErrorMessage(orderUpdate);
             var orderMessage = GetOrderEventMessage(orderUpdate, orderErrorMessage);
             if (status == OrderStatus.None && orderUpdate.SubmitStatus == 52)
@@ -796,6 +812,75 @@ namespace QuantConnect.Brokerages.Qmt
                 $"native_order_id={orderUpdate.OrderId} order_status={status} " +
                 $"qmt_order_status={orderUpdate.Status} qmt_submit_status={orderUpdate.SubmitStatus}");
             ProcessPendingDeals(orderUpdate.OrderId);
+        }
+
+        private bool ReportBrokerageSideOrderFill(
+            QmtOrderEventPayload orderUpdate,
+            OrderStatus status)
+        {
+            if (string.IsNullOrWhiteSpace(orderUpdate.OrderId) ||
+                orderUpdate.TradedVolume <= 0)
+            {
+                return false;
+            }
+
+            var brokerageOrderKey = $"{orderUpdate.Time}:{orderUpdate.OrderId}";
+            if (!TryRegisterBrokerageSideOrderFill(
+                brokerageOrderKey,
+                orderUpdate.TradedVolume))
+            {
+                return false;
+            }
+
+            _pendingDealsByNativeOrderId.TryRemove(orderUpdate.OrderId, out _);
+            var message =
+                "Detected QMT brokerage-side fill without a matching LEAN order. " +
+                $"NativeOrderId: {orderUpdate.OrderId}, " +
+                $"ClientOrderId: {orderUpdate.ClientOrderId}, " +
+                $"Symbol: {orderUpdate.StockCode}, " +
+                $"Direction: {orderUpdate.Direction}, " +
+                $"Status: {status}, " +
+                $"CumulativeQuantity: {orderUpdate.TradedVolume.ToString(CultureInfo.InvariantCulture)}, " +
+                $"AverageFillPrice: {orderUpdate.TradedPrice.ToString(CultureInfo.InvariantCulture)}";
+            OnMessage(new BrokerageMessageEvent(
+                BrokerageMessageType.Information,
+                BrokerageSideOrderFillMessageCode,
+                message));
+            return true;
+        }
+
+        private bool TryRegisterBrokerageSideOrderFill(
+            string brokerageOrderKey,
+            decimal cumulativeFilledQuantity)
+        {
+            while (true)
+            {
+                if (!_brokerageSideOrderCumulativeFilledQuantities.TryGetValue(
+                    brokerageOrderKey,
+                    out var previousCumulativeFilledQuantity))
+                {
+                    if (_brokerageSideOrderCumulativeFilledQuantities.TryAdd(
+                        brokerageOrderKey,
+                        cumulativeFilledQuantity))
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+
+                if (cumulativeFilledQuantity <= previousCumulativeFilledQuantity)
+                {
+                    return false;
+                }
+
+                if (_brokerageSideOrderCumulativeFilledQuantities.TryUpdate(
+                    brokerageOrderKey,
+                    cumulativeFilledQuantity,
+                    previousCumulativeFilledQuantity))
+                {
+                    return true;
+                }
+            }
         }
 
         private void HandleDeal(QmtDealEventPayload deal, bool queueIfUnmatched = true)
