@@ -110,6 +110,62 @@ class QmtGatewayVolumeUnitTests(unittest.TestCase):
         self.assertEqual(123_400, history_bar["volume"])
         self.assertEqual("lots_unverified", source_volume_unit)
 
+    def test_tick_history_downloads_and_returns_time_ordered_ticks(self):
+        download_calls = []
+        market_data_calls = []
+
+        def download_history(*arguments):
+            download_calls.append(arguments)
+
+        def get_market_data(**arguments):
+            market_data_calls.append(arguments)
+            return {
+                "600000.SH": [
+                    {
+                        "time": "20260930093003",
+                        "lastPrice": 10.01,
+                        "volume": 124,
+                        "pvolume": 12_400,
+                        "amount": 124_124,
+                    },
+                    {
+                        "time": "20260930093000",
+                        "lastPrice": 10,
+                        "volume": 123,
+                        "pvolume": 12_300,
+                        "amount": 123_000,
+                    },
+                ]
+            }
+
+        gateway = self.gateway_module.LeanQmtGateway(
+            context_info=object(),
+            account_id="history-test",
+            down_history_data_function=download_history,
+            get_market_data_function=get_market_data,
+        )
+
+        response = gateway._query_history(
+            {
+                "stock_code": "600000.SH",
+                "period": "tick",
+                "start_time": "20260930",
+                "end_time": "20260930",
+            }
+        )
+
+        self.assertEqual(
+            [("600000.SH", "tick", "20260930", "20260930")],
+            download_calls,
+        )
+        self.assertFalse(market_data_calls[0]["fill_data"])
+        self.assertEqual("shares", response["volume_unit"])
+        self.assertEqual(
+            ["20260930093000", "20260930093003"],
+            [history_tick["time"] for history_tick in response["ticks"]],
+        )
+        self.assertEqual(12_300, response["ticks"][0]["volume"])
+
 
 if __name__ == "__main__":
     unittest.main()

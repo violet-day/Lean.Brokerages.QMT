@@ -1755,10 +1755,10 @@ class LeanQmtGateway(object):
         start_time = str(payload.get("start_time") or "").strip()
         end_time = str(payload.get("end_time") or "").strip()
         self._validate_stock_code(stock_code)
-        if period not in ("1m", "1d"):
+        if period not in ("tick", "1m", "1d"):
             raise _RequestError(
                 "UNSUPPORTED_HISTORY_PERIOD",
-                "QMT history supports only 1m and 1d periods.",
+                "QMT history supports only tick, 1m, and 1d periods.",
             )
         if not callable(self.get_market_data_function):
             raise _RequestError(
@@ -1792,14 +1792,21 @@ class LeanQmtGateway(object):
             )
         else:
             _log("history_download_unavailable", stock_code=stock_code)
-        history_field_names = [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "amount",
-        ]
+        history_field_names = (
+            [
+                "time",
+                "lastPrice",
+                "amount",
+                "volume",
+                "pvolume",
+                "bidPrice",
+                "askPrice",
+                "bidVol",
+                "askVol",
+            ]
+            if period == "tick"
+            else ["open", "high", "low", "close", "volume", "amount"]
+        )
         history_data = self.get_market_data_function(
             fields=history_field_names,
             stock_code=[stock_code],
@@ -1808,7 +1815,7 @@ class LeanQmtGateway(object):
             end_time=end_time,
             count=-1,
             dividend_type="none",
-            fill_data=True,
+            fill_data=period != "tick",
             subscribe=False,
         )
         history_records = _history_records(
@@ -1823,6 +1830,25 @@ class LeanQmtGateway(object):
             sample=repr(history_records[0])[:500] if history_records else "",
             stock_code=stock_code,
         )
+        if period == "tick":
+            ticks = [
+                _normalize_quote(stock_code, history_row)
+                for history_row in history_records
+            ]
+            ticks.sort(key=lambda history_tick: history_tick["time"])
+            _log(
+                "history_tick_query_ok",
+                elapsed_ms=int((time.time() - started_at) * 1000),
+                end_time=end_time,
+                first_time=ticks[0]["time"] if ticks else "",
+                last_time=ticks[-1]["time"] if ticks else "",
+                start_time=start_time,
+                stock_code=stock_code,
+                ticks=len(ticks),
+                volume_unit="shares",
+            )
+            return {"ticks": ticks, "volume_unit": "shares"}
+
         bars = []
         source_volume_unit_counts = {}
         for history_row in history_records:
