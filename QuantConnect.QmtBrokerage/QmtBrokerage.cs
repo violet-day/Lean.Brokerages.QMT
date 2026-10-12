@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -27,7 +28,9 @@ namespace QuantConnect.Brokerages.Qmt
     public sealed class QmtBrokerage : Brokerage, IDataQueueHandler, IQmtSecurityStatusProvider
     {
         private const string BrokerageSideOrderFillMessageCode = "BrokerageSideOrderFill";
+        private const string HoldingsReportFileName = "qmt-holdings.json";
         private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
+        private static readonly TimeSpan DefaultHoldingsReportInterval = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan SecurityTradingStatusCacheDuration = TimeSpan.FromSeconds(30);
 
         private static readonly TimeSpan[] DefaultReconnectDelays =
@@ -47,10 +50,16 @@ namespace QuantConnect.Brokerages.Qmt
         private readonly IDataAggregator _dataAggregator = new AggregationManager();
         private readonly ITimeProvider _timeProvider;
         private readonly TimeSpan? _reconnectIntervalOverride;
+        private readonly string _holdingsReportPath;
+        private readonly TimeSpan _holdingsReportInterval;
         private readonly object _reconnectLock = new object();
+        private readonly object _holdingsReportLoopLock = new object();
+        private readonly object _holdingsReportWriteLock = new object();
         private QmtAccountProperties? _accountProperties;
         private CancellationTokenSource? _reconnectCancellationTokenSource;
         private Task? _reconnectTask;
+        private CancellationTokenSource? _holdingsReportCancellationTokenSource;
+        private Task? _holdingsReportTask;
         private readonly ConcurrentDictionary<string, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<string, SubscriptionState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
@@ -92,6 +101,25 @@ namespace QuantConnect.Brokerages.Qmt
             QmtSymbolMapper? symbolMapper = null,
             ITimeProvider? timeProvider = null,
             TimeSpan? reconnectInterval = null)
+            : this(
+                gatewayClient,
+                orderProvider,
+                symbolMapper,
+                timeProvider,
+                reconnectInterval,
+                Path.Combine(Globals.ResultsDestinationFolder, HoldingsReportFileName),
+                DefaultHoldingsReportInterval)
+        {
+        }
+
+        internal QmtBrokerage(
+            IQmtGatewayClient gatewayClient,
+            IOrderProvider orderProvider,
+            QmtSymbolMapper? symbolMapper,
+            ITimeProvider? timeProvider,
+            TimeSpan? reconnectInterval,
+            string holdingsReportPath,
+            TimeSpan holdingsReportInterval)
             : base("QMT")
         {
             _gatewayClient = gatewayClient ?? throw new ArgumentNullException(nameof(gatewayClient));
@@ -99,6 +127,16 @@ namespace QuantConnect.Brokerages.Qmt
             _symbolMapper = symbolMapper ?? new QmtSymbolMapper();
             _timeProvider = timeProvider ?? RealTimeProvider.Instance;
             _reconnectIntervalOverride = reconnectInterval;
+            _holdingsReportPath = string.IsNullOrWhiteSpace(holdingsReportPath)
+                ? throw new ArgumentException(
+                    "The QMT holdings report path is required.",
+                    nameof(holdingsReportPath))
+                : holdingsReportPath;
+            _holdingsReportInterval = holdingsReportInterval > TimeSpan.Zero
+                ? holdingsReportInterval
+                : throw new ArgumentOutOfRangeException(
+                    nameof(holdingsReportInterval),
+                    "The QMT holdings report interval must be positive.");
             if (_reconnectIntervalOverride.HasValue &&
                 _reconnectIntervalOverride.Value <= TimeSpan.Zero)
             {
@@ -129,6 +167,7 @@ namespace QuantConnect.Brokerages.Qmt
             _securityTradingStatusByStockCode.Clear();
             Interlocked.Exchange(ref _isRecoveringConnection, 0);
             Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
+            StartHoldingsReportLoop();
             Log.Trace(
                 $"QmtBrokerage.Connect(): stage=connect status=ok account_id={serverInformation.AccountId} " +
                 $"server={serverInformation.ServerName} is_simulation={serverInformation.IsSimulation.ToString().ToLowerInvariant()} " +
@@ -138,6 +177,7 @@ namespace QuantConnect.Brokerages.Qmt
         public override void Disconnect()
         {
             Interlocked.Exchange(ref _automaticReconnectEnabled, 0);
+            StopHoldingsReportLoop();
             CancelReconnectLoop();
             Interlocked.Exchange(ref _isRecoveringConnection, 0);
             Interlocked.Exchange(ref _connectionLostAtUtcTicks, 0);
@@ -160,6 +200,7 @@ namespace QuantConnect.Brokerages.Qmt
             EnsureConnected();
             var response = SendRequest(QmtProtocol.Operations.QueryPositions);
             var positions = response.ToPayload<QmtQueryPositionsPayload>().Positions;
+            TryWriteHoldingsReport(positions, "startup");
             var holdings = positions
                 .Where(position => position.Volume != 0)
                 .Select(position => new Holding
@@ -593,6 +634,7 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             Interlocked.Exchange(ref _automaticReconnectEnabled, 0);
+            StopHoldingsReportLoop();
             CancelReconnectLoop();
             _gatewayClient.EventReceived -= HandleGatewayEvent;
             _gatewayClient.Disconnected -= HandleGatewayDisconnected;
@@ -601,6 +643,205 @@ namespace QuantConnect.Brokerages.Qmt
             _dataAggregator.Dispose();
             _gatewayClient.Dispose();
             base.Dispose();
+        }
+
+        private void StartHoldingsReportLoop()
+        {
+            lock (_holdingsReportLoopLock)
+            {
+                if ((_holdingsReportTask != null && !_holdingsReportTask.IsCompleted) ||
+                    Volatile.Read(ref _isDisposed) == 1)
+                {
+                    return;
+                }
+
+                var cancellationTokenSource = new CancellationTokenSource();
+                _holdingsReportCancellationTokenSource = cancellationTokenSource;
+                _holdingsReportTask = Task.Run(() =>
+                    HoldingsReportLoopAsync(cancellationTokenSource.Token));
+            }
+        }
+
+        private void StopHoldingsReportLoop()
+        {
+            CancellationTokenSource? cancellationTokenSource;
+            Task? holdingsReportTask;
+            lock (_holdingsReportLoopLock)
+            {
+                cancellationTokenSource = _holdingsReportCancellationTokenSource;
+                holdingsReportTask = _holdingsReportTask;
+                _holdingsReportCancellationTokenSource = null;
+                _holdingsReportTask = null;
+            }
+
+            if (cancellationTokenSource == null)
+            {
+                return;
+            }
+
+            try
+            {
+                cancellationTokenSource.Cancel();
+                holdingsReportTask?.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                cancellationTokenSource.Dispose();
+            }
+        }
+
+        private bool IsHoldingsReportLoopRunning()
+        {
+            lock (_holdingsReportLoopLock)
+            {
+                return _holdingsReportCancellationTokenSource != null &&
+                    _holdingsReportTask != null &&
+                    !_holdingsReportTask.IsCompleted;
+            }
+        }
+
+        private async Task HoldingsReportLoopAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(_holdingsReportInterval, cancellationToken).ConfigureAwait(false);
+                if (!IsConnected)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!IsHoldingsReportWindow())
+                    {
+                        continue;
+                    }
+                    var positions = SendRequest(
+                            QmtProtocol.Operations.QueryPositions,
+                            cancellationToken: cancellationToken)
+                        .ToPayload<QmtQueryPositionsPayload>()
+                        .Positions;
+                    TryWriteHoldingsReport(positions, "scheduled");
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    Log.Error(
+                        exception,
+                        $"QmtBrokerage.HoldingsReportLoopAsync(): status=failed phase=scheduled " +
+                        $"path={_holdingsReportPath} error_type={exception.GetType().Name}");
+                }
+            }
+        }
+
+        private bool IsHoldingsReportWindow()
+        {
+            var chinaTime = _timeProvider.GetUtcNow().ConvertFromUtc(TimeZones.Shanghai);
+            return QmtMarket.IsMarketOpen(chinaTime) &&
+                (!AccountProperties.IsSimulation || chinaTime.TimeOfDay >= TimeSpan.FromHours(10));
+        }
+
+        private bool TryWriteHoldingsReport(
+            IReadOnlyCollection<QmtPositionSnapshot> positions,
+            string phase)
+        {
+            try
+            {
+                WriteHoldingsReport(positions);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Log.Error(
+                    exception,
+                    $"QmtBrokerage.WriteHoldingsReport(): status=failed phase={phase} " +
+                    $"path={_holdingsReportPath} error_type={exception.GetType().Name}");
+                return false;
+            }
+        }
+
+        private void WriteHoldingsReport(IReadOnlyCollection<QmtPositionSnapshot> positions)
+        {
+            var holdings = new SortedDictionary<string, HoldingsReportEntry>(StringComparer.Ordinal);
+            var seenStockCodes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var position in positions)
+            {
+                var stockCode = QmtSecurityCode.Parse(position.StockCode).ToString();
+                if (!seenStockCodes.Add(stockCode))
+                {
+                    throw new InvalidDataException(
+                        $"QMT positions contain duplicate stock code {stockCode}.");
+                }
+                var totalQuantity = GetReportQuantity(position.Volume, stockCode, "volume");
+                var availableQuantity = GetReportQuantity(
+                    position.AvailableVolume,
+                    stockCode,
+                    "available_volume");
+                if (availableQuantity > totalQuantity)
+                {
+                    throw new InvalidDataException(
+                        $"QMT position {stockCode} available_volume {availableQuantity} " +
+                        $"exceeds volume {totalQuantity}.");
+                }
+                if (totalQuantity == 0)
+                {
+                    continue;
+                }
+                holdings.Add(
+                    stockCode,
+                    new HoldingsReportEntry(availableQuantity, totalQuantity));
+            }
+
+            var reportDirectory = Path.GetDirectoryName(_holdingsReportPath);
+            if (string.IsNullOrWhiteSpace(reportDirectory))
+            {
+                throw new InvalidDataException(
+                    $"QMT holdings report path has no directory: {_holdingsReportPath}");
+            }
+
+            lock (_holdingsReportWriteLock)
+            {
+                Directory.CreateDirectory(reportDirectory);
+                var temporaryReportPath = Path.Combine(
+                    reportDirectory,
+                    $"{Path.GetFileName(_holdingsReportPath)}.{Guid.NewGuid():N}.tmp");
+                try
+                {
+                    var reportJson = JsonConvert.SerializeObject(holdings, Formatting.Indented) + "\n";
+                    File.WriteAllText(
+                        temporaryReportPath,
+                        reportJson,
+                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                    File.Move(temporaryReportPath, _holdingsReportPath, overwrite: true);
+                }
+                finally
+                {
+                    if (File.Exists(temporaryReportPath))
+                    {
+                        File.Delete(temporaryReportPath);
+                    }
+                }
+            }
+        }
+
+        private static long GetReportQuantity(
+            decimal quantity,
+            string stockCode,
+            string fieldName)
+        {
+            if (quantity < 0 || quantity != decimal.Truncate(quantity) || quantity > long.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"QMT position {stockCode} has invalid {fieldName}: " +
+                    $"{quantity.ToString(CultureInfo.InvariantCulture)}.");
+            }
+            return decimal.ToInt64(quantity);
         }
 
         private QmtProtocolMessage SendRequest(
@@ -1377,6 +1618,10 @@ namespace QuantConnect.Brokerages.Qmt
                     cancellationToken: cancellationToken)
                 .ToPayload<QmtQueryPositionsPayload>()
                 .Positions;
+            if (IsHoldingsReportLoopRunning())
+            {
+                TryWriteHoldingsReport(positions, "reconnect");
+            }
             recoveryStage = "order-query";
             var orders = SendRequest(
                     QmtProtocol.Operations.QueryOrders,
@@ -1550,6 +1795,21 @@ namespace QuantConnect.Brokerages.Qmt
             {
                 TradingDate = tradingDate;
                 CumulativeVolume = cumulativeVolume;
+            }
+        }
+
+        private sealed class HoldingsReportEntry
+        {
+            [JsonProperty("available_volume", Order = 1)]
+            public long AvailableVolume { get; }
+
+            [JsonProperty("volume", Order = 2)]
+            public long Volume { get; }
+
+            public HoldingsReportEntry(long availableVolume, long volume)
+            {
+                AvailableVolume = availableVolume;
+                Volume = volume;
             }
         }
     }
