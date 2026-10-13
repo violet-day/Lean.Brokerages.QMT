@@ -1,15 +1,18 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using QuantConnect.Data;
 using QuantConnect.Data.Market;
+using QuantConnect.Logging;
 
 namespace QuantConnect.Brokerages.Qmt.Tests
 {
     [TestFixture]
+    [NonParallelizable]
     public class QmtBrokerageSubscriptionTests
     {
         [Test]
@@ -135,6 +138,74 @@ namespace QuantConnect.Brokerages.Qmt.Tests
             });
         }
 
+        [Test]
+        public void LogsOnlyFirstUnmatchedQuoteAndDoesNotLogNormalEvents()
+        {
+            var originalLogHandler = Log.LogHandler;
+            using var logHandler = new QueueLogHandler();
+            Log.LogHandler = logHandler;
+            try
+            {
+                using var gatewayClient = new QmtSubscriptionTestGatewayClient();
+                using var brokerage = new QmtBrokerage(gatewayClient, new QmtOrderTestProvider());
+                var quote = new QmtQuoteEventPayload
+                {
+                    StockCode = "600000.SH",
+                    Time = "20260824150000",
+                    LastPrice = 9.22m,
+                    Volume = 1000m,
+                    VolumeUnit = "shares"
+                };
+
+                gatewayClient.EmitQuoteEvent(quote);
+                gatewayClient.EmitQuoteEvent(quote);
+                Assert.That(
+                    logHandler.Logs.Count(entry => entry.Message.Contains("QmtBrokerage.HandleQuote(): status=unmatched")),
+                    Is.EqualTo(1));
+
+                var subscriptionIdentifier = SecurityIdentifier.GenerateEquity(
+                    SecurityIdentifier.DefaultDate,
+                    "600000.SH",
+                    QmtSymbolMapper.MarketName);
+                var subscriptionConfiguration = new SubscriptionDataConfig(
+                    typeof(Tick),
+                    new Symbol(subscriptionIdentifier, "600000.SH"),
+                    Resolution.Tick,
+                    TimeZones.Shanghai,
+                    TimeZones.Shanghai,
+                    false,
+                    false,
+                    false,
+                    false,
+                    TickType.Trade);
+                using var enumerator = brokerage.Subscribe(subscriptionConfiguration, (_, _) => { });
+                while (logHandler.Logs.TryDequeue(out _))
+                {
+                }
+
+                gatewayClient.EmitQuoteEvent(quote);
+                gatewayClient.EmitEvent(QmtProtocol.Operations.Account);
+                gatewayClient.EmitEvent(QmtProtocol.Operations.Position);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(
+                        logHandler.Logs.Any(entry => entry.Message.Contains("QmtBrokerage.HandleQuote(): status=published")),
+                        Is.False);
+                    Assert.That(
+                        logHandler.Logs.Any(entry => entry.Message.Contains("QmtBrokerage.HandleGatewayEvent(): operation=account")),
+                        Is.False);
+                    Assert.That(
+                        logHandler.Logs.Any(entry => entry.Message.Contains("QmtBrokerage.HandleGatewayEvent(): operation=position")),
+                        Is.False);
+                });
+            }
+            finally
+            {
+                Log.LogHandler = originalLogHandler;
+            }
+        }
+
         private sealed class QmtSubscriptionTestGatewayClient : IQmtGatewayClient
         {
             public bool IsConnected { get; private set; } = true;
@@ -204,6 +275,17 @@ namespace QuantConnect.Brokerages.Qmt.Tests
                     Operation = QmtProtocol.Operations.Quote,
                     Success = true,
                     Payload = JObject.FromObject(payload)
+                }));
+            }
+
+            public void EmitEvent(string operation)
+            {
+                EventReceived?.Invoke(this, new QmtGatewayMessageEventArgs(new QmtProtocolMessage
+                {
+                    MessageType = QmtProtocol.MessageTypes.Event,
+                    Operation = operation,
+                    Success = true,
+                    Payload = new JObject()
                 }));
             }
 

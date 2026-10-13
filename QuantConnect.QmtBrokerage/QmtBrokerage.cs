@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -32,6 +33,7 @@ namespace QuantConnect.Brokerages.Qmt
         private const string QmtOrderEventMessagePrefix = "QMT_EVENT_V1 ";
         private static readonly TimeSpan DefaultHoldingsReportInterval = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan SecurityTradingStatusCacheDuration = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan SlowHistoryRequestThreshold = TimeSpan.FromSeconds(5);
 
         private static readonly TimeSpan[] DefaultReconnectDelays =
         {
@@ -62,6 +64,8 @@ namespace QuantConnect.Brokerages.Qmt
         private Task? _holdingsReportTask;
         private readonly ConcurrentDictionary<string, SubscriptionState> _subscriptions =
             new ConcurrentDictionary<string, SubscriptionState>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, byte> _reportedUnmatchedQuoteStockCodes =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<Symbol, CumulativeVolumeState> _cumulativeVolumeBySymbol =
             new Dictionary<Symbol, CumulativeVolumeState>();
         private readonly object _cumulativeVolumeLock = new object();
@@ -295,47 +299,70 @@ namespace QuantConnect.Brokerages.Qmt
             }
 
             var period = request.Resolution == Resolution.Daily ? "1d" : "1m";
-            var response = SendRequest(QmtProtocol.Operations.QueryHistory, new QmtHistoryRequest
+            var historyRequestStartedAt = Stopwatch.GetTimestamp();
+            try
             {
-                StockCode = _symbolMapper.GetBrokerageSymbol(request.Symbol),
-                Period = period,
-                StartTime = request.StartTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
-                EndTime = request.EndTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
-            });
-            var barPeriod = request.Resolution == Resolution.Daily
-                ? TimeSpan.FromDays(1)
-                : TimeSpan.FromMinutes(1);
-            var historyPayload = response.ToPayload<QmtQueryHistoryPayload>();
-            if (!string.Equals(historyPayload.VolumeUnit, "shares", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"QMT history volume unit must be shares, received '{historyPayload.VolumeUnit}'.");
-            }
-            var bars = historyPayload.Bars
-                .Select(bar =>
+                var response = SendRequest(QmtProtocol.Operations.QueryHistory, new QmtHistoryRequest
                 {
-                    var qmtBarTime = ParseQmtTime(bar.Time);
-                    var barStartTime = request.Resolution == Resolution.Minute
-                        ? qmtBarTime.Subtract(barPeriod)
-                        : qmtBarTime;
-                    return (BaseData)new TradeBar(
-                        barStartTime,
-                        request.Symbol,
-                        bar.Open,
-                        bar.High,
-                        bar.Low,
-                        bar.Close,
-                        bar.Volume,
-                        barPeriod);
-                })
-                .OrderBy(bar => bar.Time)
-                .ToList();
-            Log.Trace(
-                $"QmtBrokerage.GetHistory(): status=ok symbol={request.Symbol.Value} resolution={request.Resolution} " +
-                $"bars={bars.Count} start={request.StartTimeLocal:O} end={request.EndTimeLocal:O} " +
-                $"first={(bars.Count == 0 ? "" : bars[0].Time.ToString("O"))} " +
-                $"last={(bars.Count == 0 ? "" : bars[^1].Time.ToString("O"))}");
-            return bars;
+                    StockCode = _symbolMapper.GetBrokerageSymbol(request.Symbol),
+                    Period = period,
+                    StartTime = request.StartTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
+                    EndTime = request.EndTimeLocal.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
+                });
+                var barPeriod = request.Resolution == Resolution.Daily
+                    ? TimeSpan.FromDays(1)
+                    : TimeSpan.FromMinutes(1);
+                var historyPayload = response.ToPayload<QmtQueryHistoryPayload>();
+                if (!string.Equals(historyPayload.VolumeUnit, "shares", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"QMT history volume unit must be shares, received '{historyPayload.VolumeUnit}'.");
+                }
+                var bars = historyPayload.Bars
+                    .Select(bar =>
+                    {
+                        var qmtBarTime = ParseQmtTime(bar.Time);
+                        var barStartTime = request.Resolution == Resolution.Minute
+                            ? qmtBarTime.Subtract(barPeriod)
+                            : qmtBarTime;
+                        return (BaseData)new TradeBar(
+                            barStartTime,
+                            request.Symbol,
+                            bar.Open,
+                            bar.High,
+                            bar.Low,
+                            bar.Close,
+                            bar.Volume,
+                            barPeriod);
+                    })
+                    .OrderBy(bar => bar.Time)
+                    .ToList();
+                var elapsed = Stopwatch.GetElapsedTime(historyRequestStartedAt);
+                if (bars.Count == 0)
+                {
+                    Log.Trace(
+                        $"QmtBrokerage.GetHistory(): status=empty symbol={request.Symbol.Value} resolution={request.Resolution} " +
+                        $"elapsed_ms={elapsed.TotalMilliseconds:0} start={request.StartTimeLocal:O} end={request.EndTimeLocal:O}");
+                }
+                else if (elapsed >= SlowHistoryRequestThreshold)
+                {
+                    Log.Trace(
+                        $"QmtBrokerage.GetHistory(): status=slow symbol={request.Symbol.Value} resolution={request.Resolution} " +
+                        $"bars={bars.Count} elapsed_ms={elapsed.TotalMilliseconds:0} " +
+                        $"start={request.StartTimeLocal:O} end={request.EndTimeLocal:O}");
+                }
+                return bars;
+            }
+            catch (Exception exception)
+            {
+                var status = exception is QmtGatewayTimeoutException ? "timeout" : "failed";
+                Log.Error(
+                    exception,
+                    $"QmtBrokerage.GetHistory(): status={status} symbol={request.Symbol.Value} resolution={request.Resolution} " +
+                    $"elapsed_ms={Stopwatch.GetElapsedTime(historyRequestStartedAt).TotalMilliseconds:0} " +
+                    $"start={request.StartTimeLocal:O} end={request.EndTimeLocal:O}");
+                throw;
+            }
         }
 
         public override bool PlaceOrder(Order order)
@@ -587,6 +614,7 @@ namespace QuantConnect.Brokerages.Qmt
                         $"resolution={dataConfig.Resolution} tick_type={dataConfig.TickType}");
                     return new SubscriptionState(result.SubscriptionId, dataConfig.Symbol);
                 });
+            _reportedUnmatchedQuoteStockCodes.TryRemove(brokerageStockCode, out _);
             Interlocked.Increment(ref subscriptionState.ReferenceCount);
             return _dataAggregator.Add(dataConfig, newDataAvailableHandler);
         }
@@ -893,7 +921,6 @@ namespace QuantConnect.Brokerages.Qmt
                         break;
                     case QmtProtocol.Operations.Account:
                     case QmtProtocol.Operations.Position:
-                        Log.Trace($"QmtBrokerage.HandleGatewayEvent(): operation={eventArgs.Message.Operation} status=received");
                         break;
                     default:
                         Log.Trace($"QmtBrokerage.HandleGatewayEvent(): operation={eventArgs.Message.Operation} status=ignored");
@@ -916,8 +943,11 @@ namespace QuantConnect.Brokerages.Qmt
             var brokerageStockCode = QmtSecurityCode.Parse(quote.StockCode).ToString();
             if (!_subscriptions.TryGetValue(brokerageStockCode, out var subscriptionState))
             {
-                Log.Trace(
-                    $"QmtBrokerage.HandleQuote(): status=unmatched stock_code={brokerageStockCode}");
+                if (_reportedUnmatchedQuoteStockCodes.TryAdd(brokerageStockCode, 0))
+                {
+                    Log.Trace(
+                        $"QmtBrokerage.HandleQuote(): status=unmatched stock_code={brokerageStockCode}");
+                }
                 return;
             }
 
@@ -943,10 +973,6 @@ namespace QuantConnect.Brokerages.Qmt
             };
             _dataAggregator.Update(tradeTick);
             _dataAggregator.Update(quoteTick);
-            Log.Trace(
-                $"QmtBrokerage.HandleQuote(): status=published symbol={symbol.Value} time={localTime:O} " +
-                $"last={quote.LastPrice} cumulative_volume={quote.Volume} trade_quantity={tradeQuantity} " +
-                "published_types=TradeTick,QuoteTick");
         }
 
         private void HandleOrder(QmtOrderEventPayload orderUpdate)

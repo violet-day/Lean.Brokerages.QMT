@@ -186,9 +186,7 @@ try {
     $validationDeadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $validationDeadline) {
         $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
-        $dailyHistoryPassed = $containerLogText.Contains("QmtBrokerage.GetHistory(): status=ok symbol=600000 resolution=Daily bars=5")
-        $minuteHistoryPassed = $containerLogText.Contains("QmtBrokerage.GetHistory(): status=ok symbol=600000 resolution=Minute")
-        $historyPassed = $dailyHistoryPassed -and $minuteHistoryPassed
+        $historyPassed = $containerLogText -match '\[qmt-e2e\] stage=initialize status=ok [^\r\n]*daily_bars=\d+ [^\r\n]*minute_bars=\d+'
         $accountPassed = $containerLogText.Contains("QmtBrokerage.GetCashBalance(): status=ok accounts=1")
         $positionsPassed = $containerLogText.Contains("QmtBrokerage.GetAccountHoldings(): status=ok")
         $ordersPassed = $containerLogText.Contains("QmtBrokerage.GetOpenOrders(): status=ok")
@@ -237,6 +235,7 @@ try {
         $containerLogText = (& $dockerExecutable logs $containerId 2>&1 | Out-String)
     }
     $algorithmInitializationPassed = $algorithmInitializationPassed -or $containerLogText.Contains("[qmt-e2e] stage=initialize status=ok")
+    $historyPassed = $historyPassed -or ($containerLogText -match '\[qmt-e2e\] stage=initialize status=ok [^\r\n]*daily_bars=\d+ [^\r\n]*minute_bars=\d+')
     $minuteBarPassed = $minuteBarPassed -or $containerLogText.Contains("[qmt-e2e] stage=minute-bar status=ok")
     $completed = $completed -or $containerLogText.Contains("[qmt-e2e] stage=complete status=ok operations=readonly")
     [System.IO.File]::AppendAllText($liveTestLogPath, $containerLogText, $utf8Encoding)
@@ -251,7 +250,7 @@ finally {
     $ErrorActionPreference = $previousErrorActionPreference
 }
 if (-not $historyPassed) {
-    throw "The real QMT daily/minute history success markers were not found."
+    throw "The real QMT daily/minute history validation marker was not found."
 }
 if (-not $accountPassed) {
     throw "The real QMT account query success marker was not found."
