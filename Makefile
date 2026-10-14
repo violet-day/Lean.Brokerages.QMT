@@ -12,25 +12,28 @@ PYTHON_EXECUTABLE ?= python3
 QMT_PUSH_REPOSITORY ?= true
 qmt_push_option = $(if $(filter false 0 no,$(QMT_PUSH_REPOSITORY)),--no-push,)
 
-.PHONY: calendar install-python-stubs sync-windows package-windows test test-readonly test-smoke test-trading
+.PHONY: calendar gateway-entry install-python-stubs sync-windows package-windows test test-readonly test-smoke test-trading
 
 calendar:
 	@$(PYTHON_EXECUTABLE) scripts/generate_china_trading_calendar.py --check
+
+gateway-entry:
+	@$(PYTHON_EXECUTABLE) scripts/generate_qmt_gateway_entry.py --check
 
 install-python-stubs:
 	@echo '[qmt-task] $(call task_path,install-python-stubs)'
 	@$(LEAN_PYTHON_EXECUTABLE) -m pip install --upgrade ./python_stubs
 
-test: calendar
+test: calendar gateway-entry
 	@echo '[qmt-task] $(call task_path,test)'
 	@echo '[qmt-test] host=mac stage=all status=start workflow="sync -> Windows Python tests -> Windows build-if-changed -> Windows NUnit tests -> package DLL"'
 	@QMT_TASK_PATH='$(call task_path,test)' ./scripts/sync_worktree_to_windows.sh --test $(qmt_push_option)
 	@echo '[qmt-test] host=mac stage=all status=ok'
 
-sync-windows: calendar
+sync-windows: calendar gateway-entry
 	@QMT_TASK_PATH='$(call task_path,sync-windows)' ./scripts/sync_worktree_to_windows.sh
 
-package-windows: calendar
+package-windows: calendar gateway-entry
 	@echo '[qmt-task] $(call task_path,package-windows)'
 	@QMT_TASK_PATH='$(call task_path,package-windows)' ./scripts/sync_worktree_to_windows.sh --package $(qmt_push_option)
 

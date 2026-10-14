@@ -168,9 +168,9 @@ QuantConnect.QmtBrokerage.Tests/
   E2E/Infrastructure/         Shared categories and real-Gateway test context
   ...                         Mapping, model, and protocol contract tests
 qmt_python/
-  qmt_gateway_entry.py        Stable code copied into a QMT strategy once
-  lean_qmt_gateway.py         Reloadable Gateway implementation
-  qmt_local_config.example.py Local configuration template
+  qmt_gateway_entry.py        Self-contained code pasted into a QMT strategy
+  lean_qmt_gateway.py         Gateway implementation embedded into the entry
+  qmt_local_config.example.py Earlier probe configuration template
   qmt_readonly_probe_entry.py Earlier read-only diagnostic entry
 python_stubs/
   QuantConnect/Brokerages/Qmt QMT strategy type stubs and runtime loader
@@ -331,19 +331,11 @@ QMT must be logged in and the Gateway strategy must be started manually. The
 repository scripts do not start, stop, restart, or operate the QMT client.
 
 1. Synchronize the repository to Windows with `make sync-windows`.
-2. On Windows, create the ignored local configuration:
-
-   ```powershell
-   Set-Location C:\Users\nemo\lean\Lean.Brokerages.QMT
-   Copy-Item qmt_python\qmt_local_config.example.py qmt_python\qmt_local_config.py
-   ```
-
-3. Set `ACCOUNT_ID` in `qmt_python\qmt_local_config.py`.
-4. In the Big QMT strategy editor, create/open a strategy and copy the complete
+2. In the Big QMT strategy editor, create/open a strategy and copy the complete
    contents of `qmt_python\qmt_gateway_entry.py` into it once. The QMT model
    import dialog accepts packaged strategy files, so do not try to import this
    source directory through that dialog.
-5. Select the intended QMT account and manually run the strategy. A successful
+3. Select the intended QMT account and manually run the strategy. A successful
    start includes logs similar to:
 
    ```text
@@ -352,23 +344,26 @@ repository scripts do not start, stop, restart, or operate the QMT client.
    [lean_qmt_gateway] init_complete ...
    ```
 
-The entry file watches
-`C:\Users\nemo\lean\Lean.Brokerages.QMT\qmt_python\lean_qmt_gateway.py`
-and automatically reloads it after Git synchronization. It compiles the new
-source before stopping the current Gateway, does not register a second timer,
-and rolls back to the previous module if initialization fails. Updating an
-older installed entry to this hot-reload version requires one final manual
-strategy restart; later Gateway implementation changes do not. Synchronization
-updates the repository copy of the stable entry but cannot replace the source
-already pasted into QMT's model editor; entry changes therefore still require a
-manual copy and strategy restart. This direct loader avoids
-`importlib`, which is absent from QMT's trimmed Python 3.6 runtime.
+The entry embeds the complete Gateway implementation because current QMT
+runtimes can reject strategy calls to `open()` with `Forbidden FileIO`, even
+when the Windows file exists and QMT runs as administrator. Regenerate it after
+changing `lean_qmt_gateway.py`:
 
-The default `127.0.0.1` binding is suitable for a LEAN process running directly
-on Windows. A Docker deployment will require a protected non-loopback binding,
-`GATEWAY_ALLOW_REMOTE_CLIENTS = True`, and a restrictive Windows firewall rule.
-The protocol is plaintext and unauthenticated; port `17890` must never be
-exposed to the public Internet.
+```bash
+python3 scripts/generate_qmt_gateway_entry.py
+```
+
+Synchronization updates the repository copy but cannot replace source already
+pasted into QMT's model editor. Gateway implementation changes therefore
+require copying the regenerated entry and restarting the strategy. The entry
+uses the account selected in QMT, binds `0.0.0.0:17890` for Docker Desktop, and
+prints runtime logs to QMT without attempting to write a log file from its
+sandbox.
+
+The generated entry targets the documented Docker Desktop deployment and binds
+`0.0.0.0`. A restrictive Windows firewall rule must allow only the Docker
+internal network. The protocol is plaintext and unauthenticated; port `17890`
+must never be exposed to the LAN or public Internet.
 
 ## Trading validation
 
