@@ -38,7 +38,6 @@ RUNTIME_LOG_PATH = os.environ.get(
         "qmt-gateway-runtime.log",
     ),
 )
-RUNTIME_FILE_LOG_ENABLED = globals().get("RUNTIME_FILE_LOG_ENABLED", True)
 MAXIMUM_RUNTIME_LOG_BYTES = 5 * 1024 * 1024
 RUNTIME_LOG_BACKUP_COUNT = 3
 RUNTIME_LOG_RETENTION_DAYS = 14
@@ -197,24 +196,23 @@ def _log(message, **fields):
         parts.append("%s=%s" % (field_name, fields[field_name]))
     log_line = " ".join(parts)
     encoded_log_line = (log_line + "\n").encode("utf-8", "replace")
-    if RUNTIME_FILE_LOG_ENABLED:
-        try:
-            runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH)
-            if runtime_log_directory and not os.path.isdir(runtime_log_directory):
-                os.makedirs(runtime_log_directory)
-            with _runtime_log_lock:
-                try:
-                    _remove_expired_runtime_logs(log_date)
-                    _rotate_runtime_log_if_needed(
-                        runtime_log_path,
-                        len(encoded_log_line),
-                    )
-                except Exception:
-                    pass
-                with open(runtime_log_path, "ab") as runtime_log_file:
-                    runtime_log_file.write(encoded_log_line)
-        except Exception:
-            pass
+    try:
+        runtime_log_directory = os.path.dirname(RUNTIME_LOG_PATH)
+        if runtime_log_directory and not os.path.isdir(runtime_log_directory):
+            os.makedirs(runtime_log_directory)
+        with _runtime_log_lock:
+            try:
+                _remove_expired_runtime_logs(log_date)
+                _rotate_runtime_log_if_needed(
+                    runtime_log_path,
+                    len(encoded_log_line),
+                )
+            except Exception:
+                pass
+            with open(runtime_log_path, "ab") as runtime_log_file:
+                runtime_log_file.write(encoded_log_line)
+    except Exception:
+        pass
     print(log_line)
 
 
